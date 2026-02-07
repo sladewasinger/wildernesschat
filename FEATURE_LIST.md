@@ -191,7 +191,8 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Implement anchor-house + long-trunk-road stage.
 - [x] Implement iterative house growth stage off trunk roads.
 - [x] Implement Y-branch + shortcut stage for organic local variation.
-- [x] Implement inter-village connector stage (deterministic trunk-to-trunk links).
+- [x] Implement inter-village connector stage (deterministic nearest-village targeting with outward-road fallback when full links fail).
+- [ ] Rework Stage 4 into a road-first continuity model so long roads remain visible during travel even without nearby discovered villages.
 - [x] Add V2 centralized tuning constants for zoom/contour/sizing/clearance controls.
 - [x] Restructure V2 settlement tuning into stage-scoped config sections (`siting`/`roads`/`housing`/`stage2`/`stage3`/`stage4`).
 - [x] Add V2 road reuse-vs-new heuristic (parallel suppression + connector snap).
@@ -232,3 +233,4 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [ ] Settlement frequency target (distance between villages).
 - [ ] Whether first ship includes generated bridges or keeps strict no-crossing roads.
 - [ ] Whether trees/buildings move to sprite assets or stay fully procedural.
+- [ ] Stage 4 final direction: village-link-first vs road-first infinite continuity network.
