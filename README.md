@@ -78,6 +78,7 @@ Notes:
 See `ARCHITECTURE.md` for module boundaries and generation pipeline organization.
 
 The sandbox rebuild track lives under `src/v2/*` and is intentionally isolated from the main world pipeline.
+Runtime knobs for V2 are centralized in `src/v2/config.ts`.
 
 ## Pivot Plan
 

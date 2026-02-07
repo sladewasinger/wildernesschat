@@ -180,7 +180,7 @@ export class V2SettlementGenerator {
     return {
       id: `rt-${site.id}`,
       className: "trunk",
-      width: 3.2,
+      width: V2_SETTLEMENT_CONFIG.trunkRoadWidth,
       points: [start, mid, end]
     };
   }
@@ -190,7 +190,7 @@ export class V2SettlementGenerator {
     const side: -1 | 1 = hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 89)) < 0.5 ? -1 : 1;
     const normalX = -sample.tangentY;
     const normalY = sample.tangentX;
-    const offset = trunk.width * 0.5 + 15;
+    const offset = trunk.width * 0.5 + V2_SETTLEMENT_CONFIG.houseSetbackMin + 2;
     const x = sample.x + normalX * side * offset;
     const y = sample.y + normalY * side * offset;
     const width = lerp(12, 18, hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 97))) * V2_SETTLEMENT_CONFIG.houseScale;
@@ -211,7 +211,7 @@ export class V2SettlementGenerator {
     const driveRoad: RoadSegment = {
       id: `rda-${site.id}`,
       className: "drive",
-      width: 1.2,
+      width: V2_SETTLEMENT_CONFIG.drivewayRoadWidth,
       points: [
         { x: frontX, y: frontY },
         {
@@ -245,7 +245,7 @@ export class V2SettlementGenerator {
         const jitter = hashToUnit(hashCoords(localHash, 2, 3, 139));
         const normalX = -sample.tangentY;
         const normalY = sample.tangentX;
-        const offset = road.width * 0.5 + lerp(14, 24, jitter);
+        const offset = road.width * 0.5 + lerp(V2_SETTLEMENT_CONFIG.houseSetbackMin, V2_SETTLEMENT_CONFIG.houseSetbackMax, jitter);
         const x = sample.x + normalX * side * offset;
         const y = sample.y + normalY * side * offset;
         const slope = this.terrain.slopeAt(x, y);
@@ -291,7 +291,7 @@ export class V2SettlementGenerator {
         roads.push({
           id: `rd-${house.id}`,
           className: "drive",
-          width: 1.15,
+          width: V2_SETTLEMENT_CONFIG.drivewayRoadWidth,
           points: [
             { x: frontX, y: frontY },
             {
@@ -309,7 +309,7 @@ export class V2SettlementGenerator {
     const branchTarget = Math.max(2, Math.round(2 + site.score * 4));
     let added = 0;
 
-    for (let i = 0; i < branchTarget * 2; i += 1) {
+    for (let i = 0; i < branchTarget * 8; i += 1) {
       if (added >= branchTarget) {
         break;
       }
@@ -322,18 +322,55 @@ export class V2SettlementGenerator {
       const side: -1 | 1 = hashToUnit(hashCoords(localHash, 7, 11, 197)) < 0.5 ? -1 : 1;
       const angleOffset = lerp(0.7, 1.18, hashToUnit(hashCoords(localHash, 13, 17, 199))) * side;
       const baseAngle = Math.atan2(sample.tangentY, sample.tangentX) + angleOffset;
-      const length = lerp(72, 156, hashToUnit(hashCoords(localHash, 19, 23, 211)));
-      const branch = this.createDirectionalRoad(`rb-${site.id}-${i}`, "branch", 1.95, sample.x, sample.y, baseAngle, length, localHash);
-      if (!this.isRoadUsable(branch.points, roads, 6.8)) {
+      const length = lerp(82, 176, hashToUnit(hashCoords(localHash, 19, 23, 211)));
+      const branch = this.createDirectionalRoad(
+        `rb-${site.id}-${i}`,
+        "branch",
+        V2_SETTLEMENT_CONFIG.branchRoadWidth,
+        sample.x,
+        sample.y,
+        baseAngle,
+        length,
+        localHash
+      );
+      if (!this.isRoadUsable(branch.points, roads, 6.2)) {
         continue;
       }
-      if (this.isRoadNearHouses(branch.points, houses, V2_SETTLEMENT_CONFIG.branchRoadHouseClearance)) {
+      if (this.isRoadNearHouses(branch.points, houses, V2_SETTLEMENT_CONFIG.branchRoadHouseClearance - 1.5)) {
         continue;
       }
 
       roads.push(branch);
       this.growHousesAlongRoad(site, branch, 7, roads, houses, localHash ^ 0x27d4eb2f, 0.61);
       added += 1;
+    }
+
+    if (added === 0) {
+      const fallbackTs = [0.14, 0.86];
+      for (let i = 0; i < fallbackTs.length; i += 1) {
+        const sample = this.sampleRoad(trunk.points, fallbackTs[i]);
+        const side: -1 | 1 = i === 0 ? -1 : 1;
+        const angle = Math.atan2(sample.tangentY, sample.tangentX) + side * 0.92;
+        const hash = hashCoords(this.planSeed, site.cellX, site.cellY, 1201 + i * 13);
+        const fallback = this.createDirectionalRoad(
+          `rbf-${site.id}-${i}`,
+          "branch",
+          V2_SETTLEMENT_CONFIG.branchRoadWidth,
+          sample.x,
+          sample.y,
+          angle,
+          116,
+          hash
+        );
+        if (!this.isRoadUsable(fallback.points, roads, 5.8)) {
+          continue;
+        }
+        if (this.isRoadNearHouses(fallback.points, houses, V2_SETTLEMENT_CONFIG.branchRoadHouseClearance - 2)) {
+          continue;
+        }
+        roads.push(fallback);
+        this.growHousesAlongRoad(site, fallback, 6, roads, houses, hash ^ 0x27d4eb2f, 0.61);
+      }
     }
   }
 

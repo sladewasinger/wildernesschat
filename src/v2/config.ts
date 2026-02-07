@@ -15,7 +15,12 @@ export const V2_SETTLEMENT_CONFIG = {
   minSiteScore: 0.54,
   houseScale: 2.4,
   houseSpacingPadding: 12,
+  houseSetbackMin: 24,
+  houseSetbackMax: 38,
   houseRoadClearance: 12,
   branchRoadHouseClearance: 11,
-  shortcutRoadHouseClearance: 10
+  shortcutRoadHouseClearance: 10,
+  trunkRoadWidth: 3.2,
+  branchRoadWidth: 1.95,
+  drivewayRoadWidth: 1.95
 } as const;

@@ -249,7 +249,7 @@ export class V2App {
 
     const ctx = this.ctx;
     ctx.save();
-    ctx.lineCap = "round";
+    ctx.lineCap = road.className === "drive" ? "butt" : "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = "rgba(8, 10, 11, 0.9)";
     ctx.lineWidth = (road.width + outlinePad) * this.zoom;
@@ -364,9 +364,9 @@ export class V2App {
   }
 
   private roadPriority(className: RoadSegment["className"]): number {
-    if (className === "trunk") return 1;
-    if (className === "branch") return 2;
-    if (className === "shortcut") return 3;
+    if (className === "drive") return 1;
+    if (className === "shortcut") return 2;
+    if (className === "branch") return 3;
     return 4;
   }
 }
