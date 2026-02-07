@@ -1,6 +1,11 @@
 import { clamp, floorDiv, lerp } from "../util/math";
 import { V2SettlementGenerator } from "./generator";
-import { createManualHouseAt, createManualRoadBetweenHouses } from "./generator/manual-placement";
+import {
+  createManualHouseAt,
+  createManualRoadBetweenHouses,
+  createManualRoadToAttachment,
+  findClosestRoadAttachmentForHouse
+} from "./generator/manual-placement";
 import { V2TerrainSampler } from "./terrain";
 import { V2_RENDER_CONFIG, V2_SETTLEMENT_CONFIG, V2_STAGE_MAX, V2_STAGE_MIN, V2_VIEW_CONFIG } from "./config";
 import { House, Point, RoadSegment } from "./types";
@@ -164,11 +169,9 @@ export class V2App {
     const newHouse = { ...preview.house, id: `mh-${this.manualHouses.length}` };
     const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
     this.manualHouses.push(newHouse);
-    if (previous) {
-      const road = createManualRoadBetweenHouses(`mr-${this.manualRoads.length}`, previous, newHouse, this.terrain);
-      if (road) {
-        this.manualRoads.push(road);
-      }
+    const road = this.buildManualConnectionRoad(newHouse, previous, `mr-${this.manualRoads.length}`);
+    if (road) {
+      this.manualRoads.push(road);
     }
   };
 
@@ -328,8 +331,23 @@ export class V2App {
     const hover = this.screenToWorld(this.mouseCanvasX, this.mouseCanvasY);
     const house = createManualHouseAt("preview", hover.x, hover.y, this.terrain);
     const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
-    const road = previous ? createManualRoadBetweenHouses("preview-road", previous, house, this.terrain) : null;
+    const road = this.buildManualConnectionRoad(house, previous, "preview-road");
     return { house, road };
+  }
+
+  private buildManualConnectionRoad(house: House, previous: House | null, id: string): RoadSegment | null {
+    const attach = findClosestRoadAttachmentForHouse(house, this.manualRoads, 138);
+    if (attach) {
+      const road = createManualRoadToAttachment(id, house, attach, this.terrain);
+      if (road) {
+        return road;
+      }
+    }
+
+    if (!previous) {
+      return null;
+    }
+    return createManualRoadBetweenHouses(id, previous, house, this.terrain);
   }
 
   private screenToWorld(canvasX: number, canvasY: number): Point {
@@ -474,8 +492,30 @@ export class V2App {
     this.fillPolygon(corners, topIsLight ? roofDark : roofLight);
     this.fillPolygon(topHalf, topIsLight ? roofLight : roofDark);
     this.fillPolygon(bottomHalf, topIsLight ? roofDark : roofLight);
+    this.drawHouseFrontMarker(x, y, cos, sin, hw);
     this.strokePolygon(corners, "rgba(11, 15, 16, 0.94)", Math.max(1.3, 2 * this.zoom));
     ctx.restore();
+  }
+
+  private drawHouseFrontMarker(cx: number, cy: number, cos: number, sin: number, halfWidth: number): void {
+    const ctx = this.ctx;
+    const startX = cx + cos * halfWidth * 0.18;
+    const startY = cy + sin * halfWidth * 0.18;
+    const endX = cx + cos * halfWidth * 0.76;
+    const endY = cy + sin * halfWidth * 0.76;
+
+    ctx.strokeStyle = "rgba(243, 232, 202, 0.96)";
+    ctx.lineWidth = Math.max(1.05, 1.35 * this.zoom);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(26, 34, 41, 0.98)";
+    ctx.beginPath();
+    ctx.arc(endX, endY, Math.max(1.25, 1.6 * this.zoom), 0, Math.PI * 2);
+    ctx.fill();
   }
 
   private roofColor(tone: number, light: boolean): string {

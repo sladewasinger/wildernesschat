@@ -9,17 +9,86 @@ type SideNode = {
   tangentY: number;
 };
 
+export type RoadAttachment = {
+  roadId: string;
+  point: Point;
+  tangentX: number;
+  tangentY: number;
+  distance: number;
+};
+
 export const createManualHouseAt = (id: string, x: number, y: number, terrain: V2TerrainSampler): House => {
-  const downhill = downhillDirectionAt(terrain, x, y, 18);
+  const facing = closestContourFacingDirectionAt(terrain, x, y, 18);
   return {
     id,
     x,
     y,
     width: 13.8 * V2_SETTLEMENT_CONFIG.housing.houseScale,
     depth: 9.4 * V2_SETTLEMENT_CONFIG.housing.houseScale,
-    angle: Math.atan2(downhill.y, downhill.x),
+    angle: Math.atan2(facing.y, facing.x),
     tone: 0.58
   };
+};
+
+export const findClosestRoadAttachmentForHouse = (
+  house: House,
+  roads: RoadSegment[],
+  maxDistance: number
+): RoadAttachment | null => {
+  if (roads.length === 0 || maxDistance <= 0) {
+    return null;
+  }
+  const start = frontRoadNode(house);
+  let best: RoadAttachment | null = null;
+  const maxDistanceSq = maxDistance * maxDistance;
+
+  for (const road of roads) {
+    if (road.points.length < 2) {
+      continue;
+    }
+    for (let i = 1; i < road.points.length; i += 1) {
+      const a = road.points[i - 1];
+      const b = road.points[i];
+      const segX = b.x - a.x;
+      const segY = b.y - a.y;
+      const segLenSq = segX * segX + segY * segY;
+      if (segLenSq <= 1e-6) {
+        continue;
+      }
+
+      const t = clamp(((start.point.x - a.x) * segX + (start.point.y - a.y) * segY) / segLenSq, 0, 1);
+      const qx = a.x + segX * t;
+      const qy = a.y + segY * t;
+      const dx = qx - start.point.x;
+      const dy = qy - start.point.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq > maxDistanceSq) {
+        continue;
+      }
+
+      const segLen = Math.sqrt(segLenSq);
+      const baseTanX = segX / segLen;
+      const baseTanY = segY / segLen;
+      const towardAttachX = qx - start.point.x;
+      const towardAttachY = qy - start.point.y;
+      const dot = baseTanX * towardAttachX + baseTanY * towardAttachY;
+      const tangentX = dot > 0 ? -baseTanX : baseTanX;
+      const tangentY = dot > 0 ? -baseTanY : baseTanY;
+      const distance = Math.sqrt(distSq);
+
+      if (!best || distance < best.distance) {
+        best = {
+          roadId: road.id,
+          point: { x: qx, y: qy },
+          tangentX,
+          tangentY,
+          distance
+        };
+      }
+    }
+  }
+
+  return best;
 };
 
 export const createManualRoadBetweenHouses = (
@@ -28,8 +97,27 @@ export const createManualRoadBetweenHouses = (
   toHouse: House,
   terrain: V2TerrainSampler
 ): RoadSegment | null => {
-  const start = sideRoadNodeTowardHouse(fromHouse, toHouse);
-  const end = sideRoadNodeTowardHouse(toHouse, fromHouse);
+  const start = frontRoadNode(fromHouse);
+  const end = frontRoadNode(toHouse);
+  return createManualRoadBetweenNodes(id, start, end, terrain);
+};
+
+export const createManualRoadToAttachment = (
+  id: string,
+  house: House,
+  attachment: RoadAttachment,
+  terrain: V2TerrainSampler
+): RoadSegment | null => {
+  const start = frontRoadNode(house);
+  const end: SideNode = {
+    point: attachment.point,
+    tangentX: attachment.tangentX,
+    tangentY: attachment.tangentY
+  };
+  return createManualRoadBetweenNodes(id, start, end, terrain);
+};
+
+const createManualRoadBetweenNodes = (id: string, start: SideNode, end: SideNode, terrain: V2TerrainSampler): RoadSegment | null => {
   const span = Math.hypot(end.point.x - start.point.x, end.point.y - start.point.y);
   if (span < 18) {
     return null;
@@ -57,29 +145,18 @@ export const createManualRoadBetweenHouses = (
   };
 };
 
-const sideRoadNodeTowardHouse = (house: House, toward: House): SideNode => {
+const frontRoadNode = (house: House): SideNode => {
   const forwardX = Math.cos(house.angle);
   const forwardY = Math.sin(house.angle);
-  const leftX = -forwardY;
-  const leftY = forwardX;
-  const rightX = forwardY;
-  const rightY = -forwardX;
-  const toLen = Math.hypot(toward.x - house.x, toward.y - house.y);
-  const toX = toLen <= 1e-6 ? leftX : (toward.x - house.x) / toLen;
-  const toY = toLen <= 1e-6 ? leftY : (toward.y - house.y) / toLen;
-  const leftDot = leftX * toX + leftY * toY;
-  const rightDot = rightX * toX + rightY * toY;
-  const tangentX = leftDot >= rightDot ? leftX : rightX;
-  const tangentY = leftDot >= rightDot ? leftY : rightY;
-  const sideOffset = house.width * 0.54 + 10;
+  const frontOffset = house.width * 0.56 + 9;
 
   return {
     point: {
-      x: house.x + tangentX * sideOffset,
-      y: house.y + tangentY * sideOffset
+      x: house.x + forwardX * frontOffset,
+      y: house.y + forwardY * frontOffset
     },
-    tangentX,
-    tangentY
+    tangentX: forwardX,
+    tangentY: forwardY
   };
 };
 
@@ -184,16 +261,33 @@ const buildContourSpline = (start: Point, end: Point, terrain: V2TerrainSampler)
   return smooth;
 };
 
-const downhillDirectionAt = (terrain: V2TerrainSampler, x: number, y: number, step: number): Point => {
+const closestContourFacingDirectionAt = (terrain: V2TerrainSampler, x: number, y: number, step: number): Point => {
   const gx = terrain.elevationAt(x + step, y) - terrain.elevationAt(x - step, y);
   const gy = terrain.elevationAt(x, y + step) - terrain.elevationAt(x, y - step);
-  const dx = -gx;
-  const dy = -gy;
-  const len = Math.hypot(dx, dy);
+  const len = Math.hypot(gx, gy);
   if (len <= 1e-6) {
     return { x: 1, y: 0 };
   }
-  return { x: dx / len, y: dy / len };
+  const uphillX = gx / len;
+  const uphillY = gy / len;
+  const downhillX = -uphillX;
+  const downhillY = -uphillY;
+
+  const contourLevels = 22;
+  const eScaled = terrain.elevationAt(x, y) * contourLevels;
+  const above = Math.ceil(eScaled - 0.5) + 0.5;
+  const below = Math.floor(eScaled - 0.5) + 0.5;
+  const deltaUp = Math.max(0, above - eScaled);
+  const deltaDown = Math.max(0, eScaled - below);
+  if (deltaUp + 1e-6 < deltaDown) {
+    return { x: uphillX, y: uphillY };
+  }
+  if (deltaDown + 1e-6 < deltaUp) {
+    return { x: downhillX, y: downhillY };
+  }
+
+  const tie = Math.sin(x * 0.013 + y * 0.017);
+  return tie >= 0 ? { x: downhillX, y: downhillY } : { x: uphillX, y: uphillY };
 };
 
 const contourDirectionAt = (terrain: V2TerrainSampler, x: number, y: number, step: number): Point => {
