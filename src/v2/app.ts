@@ -181,16 +181,15 @@ export class V2App {
     if (!preview.house) {
       return;
     }
-    const newHouse = { ...preview.house, id: `mh-${this.manualHouses.length}` };
-    const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
-    const connection = this.buildManualConnectionRoad(newHouse, previous, `mr-${this.manualRoads.length}`);
-    const placedHouse = connection.house ? { ...connection.house, id: newHouse.id } : newHouse;
-    this.manualHouses.push(placedHouse);
-    if (connection.secondaryRoad) {
-      this.manualRoads.push(connection.secondaryRoad);
+    const houseId = `mh-${this.manualHouses.length}`;
+    this.manualHouses.push({ ...preview.house, id: houseId });
+    let nextRoadIndex = this.manualRoads.length;
+    if (preview.secondaryRoad) {
+      this.manualRoads.push(this.cloneRoadWithId(preview.secondaryRoad, `mr-${nextRoadIndex}`));
+      nextRoadIndex += 1;
     }
-    if (connection.road) {
-      this.manualRoads.push(connection.road);
+    if (preview.road) {
+      this.manualRoads.push(this.cloneRoadWithId(preview.road, `mr-${nextRoadIndex}`));
     }
   };
 
@@ -367,7 +366,7 @@ export class V2App {
     const hover = this.screenToWorld(this.mouseCanvasX, this.mouseCanvasY);
     const baseHouse = createManualHouseAt("preview", hover.x, hover.y, this.terrain, this.manualRoads);
     const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
-    const connection = this.buildManualConnectionRoad(baseHouse, previous, "preview-road");
+    const connection = this.resolveManualConnection(baseHouse, previous, "preview-road");
     return {
       house: connection.house ?? baseHouse,
       road: connection.road,
@@ -376,6 +375,44 @@ export class V2App {
       attachPoint: connection.attachPoint,
       secondaryAttachPoint: connection.secondaryAttachPoint,
       searchRadius: connection.searchRadius
+    };
+  }
+
+  private resolveManualConnection(
+    house: House,
+    previous: House | null,
+    id: string
+  ): {
+    house: House | null;
+    road: RoadSegment | null;
+    secondaryRoad: RoadSegment | null;
+    mode: ManualConnectionMode;
+    attachPoint: Point | null;
+    secondaryAttachPoint: Point | null;
+    searchRadius: number;
+  } {
+    const first = this.buildManualConnectionRoad(house, previous, id);
+    const firstHouse = first.house ?? house;
+    const second = this.buildManualConnectionRoad(firstHouse, previous, id);
+    return {
+      ...second,
+      house: second.house ?? firstHouse
+    };
+  }
+
+  private cloneRoadWithId(road: RoadSegment, id: string): RoadSegment {
+    return {
+      ...road,
+      id,
+      points: road.points.map((p) => ({ x: p.x, y: p.y })),
+      bezierDebug: road.bezierDebug
+        ? road.bezierDebug.map((curve) => ({
+            p0: { x: curve.p0.x, y: curve.p0.y },
+            p1: { x: curve.p1.x, y: curve.p1.y },
+            p2: { x: curve.p2.x, y: curve.p2.y },
+            p3: { x: curve.p3.x, y: curve.p3.y }
+          }))
+        : null
     };
   }
 
@@ -393,6 +430,7 @@ export class V2App {
     searchRadius: number;
   } {
     const hasExistingRoads = this.manualRoads.length > 0;
+    const nearRoadFacingDistance = 168;
     const searchRadius = hasExistingRoads ? Number.POSITIVE_INFINITY : previous ? Math.max(24, Math.hypot(previous.x - house.x, previous.y - house.y)) : 0;
     const attachCandidates = hasExistingRoads ? findRoadAttachmentCandidatesForHouse(house, this.manualRoads, searchRadius, 14) : [];
     if (attachCandidates.length > 0) {
@@ -424,10 +462,11 @@ export class V2App {
           }
         }
 
-        const road = createManualRoadToAttachment(id, house, attach, this.terrain);
-        if (road && !this.roadIntersectsHouses(road, this.manualHouses, new Set([house.id]))) {
+        const orientedHouse = attach.distance <= nearRoadFacingDistance ? this.orientHouseTowardPoint(house, attach.point) : house;
+        const road = createManualRoadToAttachment(id, orientedHouse, attach, this.terrain);
+        if (road && !this.roadIntersectsHouses(road, this.manualHouses, new Set([orientedHouse.id]))) {
           return {
-            house,
+            house: orientedHouse,
             road,
             secondaryRoad: null,
             mode: "attach-road",
@@ -494,6 +533,18 @@ export class V2App {
     }
     const dx = target.x - house.x;
     const dy = target.y - house.y;
+    if (Math.hypot(dx, dy) <= 1e-6) {
+      return house;
+    }
+    return {
+      ...house,
+      angle: Math.atan2(dy, dx)
+    };
+  }
+
+  private orientHouseTowardPoint(house: House, point: Point): House {
+    const dx = point.x - house.x;
+    const dy = point.y - house.y;
     if (Math.hypot(dx, dy) <= 1e-6) {
       return house;
     }
