@@ -180,7 +180,7 @@ export class V2SettlementGenerator {
     return {
       id: `rt-${site.id}`,
       className: "trunk",
-      width: V2_SETTLEMENT_CONFIG.trunkRoadWidth,
+      width: V2_SETTLEMENT_CONFIG.roadWidth,
       points: [start, mid, end]
     };
   }
@@ -211,7 +211,7 @@ export class V2SettlementGenerator {
     const driveRoad: RoadSegment = {
       id: `rda-${site.id}`,
       className: "drive",
-      width: V2_SETTLEMENT_CONFIG.drivewayRoadWidth,
+      width: V2_SETTLEMENT_CONFIG.roadWidth,
       points: [
         { x: frontX, y: frontY },
         {
@@ -291,7 +291,7 @@ export class V2SettlementGenerator {
         roads.push({
           id: `rd-${house.id}`,
           className: "drive",
-          width: V2_SETTLEMENT_CONFIG.drivewayRoadWidth,
+          width: V2_SETTLEMENT_CONFIG.roadWidth,
           points: [
             { x: frontX, y: frontY },
             {
@@ -326,7 +326,7 @@ export class V2SettlementGenerator {
       const branch = this.createDirectionalRoad(
         `rb-${site.id}-${i}`,
         "branch",
-        V2_SETTLEMENT_CONFIG.branchRoadWidth,
+        V2_SETTLEMENT_CONFIG.roadWidth,
         sample.x,
         sample.y,
         baseAngle,
@@ -355,7 +355,7 @@ export class V2SettlementGenerator {
         const fallback = this.createDirectionalRoad(
           `rbf-${site.id}-${i}`,
           "branch",
-          V2_SETTLEMENT_CONFIG.branchRoadWidth,
+          V2_SETTLEMENT_CONFIG.roadWidth,
           sample.x,
           sample.y,
           angle,
@@ -413,7 +413,7 @@ export class V2SettlementGenerator {
         const shortcut: RoadSegment = {
           id: `rs-${site.id}-${i}-${j}`,
           className: "shortcut",
-          width: 1.25,
+          width: V2_SETTLEMENT_CONFIG.roadWidth,
           points: [a.end, mid, b.end]
         };
         if (!this.isRoadUsable(shortcut.points, roads, 6.2)) {

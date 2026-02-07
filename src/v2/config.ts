@@ -20,7 +20,11 @@ export const V2_SETTLEMENT_CONFIG = {
   houseRoadClearance: 12,
   branchRoadHouseClearance: 11,
   shortcutRoadHouseClearance: 10,
-  trunkRoadWidth: 3.2,
-  branchRoadWidth: 1.95,
-  drivewayRoadWidth: 1.95
+  roadWidth: 3.2
+} as const;
+
+export const V2_RENDER_CONFIG = {
+  roadOutlinePad: 2.6,
+  roadOutlineColor: "rgba(8, 10, 11, 0.9)",
+  roadFillColor: "rgba(212, 198, 158, 0.97)"
 } as const;

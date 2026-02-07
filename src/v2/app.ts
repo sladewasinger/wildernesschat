@@ -1,7 +1,7 @@
 import { clamp, floorDiv, lerp } from "../util/math";
 import { V2SettlementGenerator } from "./generator";
 import { V2TerrainSampler } from "./terrain";
-import { V2_STAGE_MAX, V2_STAGE_MIN, V2_VIEW_CONFIG } from "./config";
+import { V2_RENDER_CONFIG, V2_SETTLEMENT_CONFIG, V2_STAGE_MAX, V2_STAGE_MIN, V2_VIEW_CONFIG } from "./config";
 import { House, Point, RoadSegment } from "./types";
 
 type InputState = {
@@ -211,51 +211,32 @@ export class V2App {
   }
 
   private drawRoads(roads: RoadSegment[], viewMinX: number, viewMinY: number): void {
-    const ordered = roads.slice().sort((a, b) => this.roadPriority(a.className) - this.roadPriority(b.className));
-    for (const road of ordered) {
-      this.drawRoad(road, viewMinX, viewMinY);
-    }
-  }
-
-  private drawRoad(road: RoadSegment, viewMinX: number, viewMinY: number): void {
     const path = new Path2D();
-    for (let i = 0; i < road.points.length; i += 1) {
-      const p = road.points[i];
-      const x = (p.x - viewMinX) * this.zoom;
-      const y = (p.y - viewMinY) * this.zoom;
-      if (i === 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
+    for (const road of roads) {
+      if (road.points.length < 2) {
+        continue;
+      }
+      for (let i = 0; i < road.points.length; i += 1) {
+        const p = road.points[i];
+        const x = (p.x - viewMinX) * this.zoom;
+        const y = (p.y - viewMinY) * this.zoom;
+        if (i === 0) {
+          path.moveTo(x, y);
+        } else {
+          path.lineTo(x, y);
+        }
       }
     }
 
-    const outlinePad =
-      road.className === "trunk"
-        ? 3.3
-        : road.className === "branch"
-          ? 2.6
-          : road.className === "shortcut"
-            ? 2.2
-            : 1.6;
-    const fill =
-      road.className === "trunk"
-        ? "rgba(219, 204, 156, 0.985)"
-        : road.className === "branch"
-          ? "rgba(211, 198, 159, 0.97)"
-          : road.className === "shortcut"
-            ? "rgba(201, 191, 157, 0.95)"
-            : "rgba(214, 206, 180, 0.95)";
-
     const ctx = this.ctx;
     ctx.save();
-    ctx.lineCap = road.className === "drive" ? "butt" : "round";
+    ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.strokeStyle = "rgba(8, 10, 11, 0.9)";
-    ctx.lineWidth = (road.width + outlinePad) * this.zoom;
+    ctx.strokeStyle = V2_RENDER_CONFIG.roadOutlineColor;
+    ctx.lineWidth = (V2_SETTLEMENT_CONFIG.roadWidth + V2_RENDER_CONFIG.roadOutlinePad) * this.zoom;
     ctx.stroke(path);
-    ctx.strokeStyle = fill;
-    ctx.lineWidth = road.width * this.zoom;
+    ctx.strokeStyle = V2_RENDER_CONFIG.roadFillColor;
+    ctx.lineWidth = V2_SETTLEMENT_CONFIG.roadWidth * this.zoom;
     ctx.stroke(path);
     ctx.restore();
   }
@@ -361,12 +342,5 @@ export class V2App {
       x: tx + px * cos - py * sin,
       y: ty + px * sin + py * cos
     };
-  }
-
-  private roadPriority(className: RoadSegment["className"]): number {
-    if (className === "drive") return 1;
-    if (className === "shortcut") return 2;
-    if (className === "branch") return 3;
-    return 4;
   }
 }
