@@ -149,11 +149,33 @@ export class V2App {
     const minY = this.playerY - viewHeight * 0.5 - margin;
     const maxY = this.playerY + viewHeight * 0.5 + margin;
     const sites = this.generator.collectSitesInBounds(minX, maxX, minY, maxY);
+    const planBySiteId = new Map<string, ReturnType<V2SettlementGenerator["buildVillagePlan"]>>();
 
     for (const site of sites) {
       const plan = this.generator.buildVillagePlan(site, this.stage);
+      planBySiteId.set(site.id, plan);
       this.drawRoads(plan.roads, viewMinX, viewMinY);
       this.drawHouses(plan.houses, viewMinX, viewMinY);
+    }
+
+    const viewMaxX = viewMinX + viewWidth;
+    const viewMaxY = viewMinY + viewHeight;
+    const visibleSites = sites.filter((site) => site.x >= viewMinX && site.x <= viewMaxX && site.y >= viewMinY && site.y <= viewMaxY);
+    let visibleBranchCount = 0;
+    let visibleShortcutCount = 0;
+    let visibleConnectorCount = 0;
+    const perSiteMetrics: string[] = [];
+    for (const site of visibleSites) {
+      const plan = planBySiteId.get(site.id);
+      if (!plan) {
+        continue;
+      }
+      visibleBranchCount += plan.metrics.branchCount;
+      visibleShortcutCount += plan.metrics.shortcutCount;
+      visibleConnectorCount += plan.metrics.connectorCount;
+      perSiteMetrics.push(
+        `${site.id}: b=${plan.metrics.branchCount} s=${plan.metrics.shortcutCount} c=${plan.metrics.connectorCount}`
+      );
     }
 
     ctx.fillStyle = "#efe5c8";
@@ -178,7 +200,9 @@ export class V2App {
       `Chunk-ish: ${floorDiv(this.playerX, 320)}, ${floorDiv(this.playerY, 320)}`,
       `Terrain: elev=${terrain.toFixed(3)} slope=${slope.toFixed(3)}`,
       `Contour grid: ${V2_VIEW_CONFIG.terrainWorldStep} world units`,
-      `Visible sites: ${sites.length}`
+      `Visible sites: ${visibleSites.length}`,
+      `Visible metrics: branches=${visibleBranchCount} shortcuts=${visibleShortcutCount} connectors=${visibleConnectorCount}`,
+      ...(perSiteMetrics.length > 0 ? perSiteMetrics : ["Per-site metrics: none"])
     ].join("\n");
   }
 
@@ -235,10 +259,10 @@ export class V2App {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = V2_RENDER_CONFIG.roadOutlineColor;
-    ctx.lineWidth = (V2_SETTLEMENT_CONFIG.roadWidth + V2_RENDER_CONFIG.roadOutlinePad) * this.zoom;
+    ctx.lineWidth = (V2_SETTLEMENT_CONFIG.roads.width + V2_RENDER_CONFIG.roadOutlinePad) * this.zoom;
     ctx.stroke(path);
     ctx.strokeStyle = V2_RENDER_CONFIG.roadFillColor;
-    ctx.lineWidth = V2_SETTLEMENT_CONFIG.roadWidth * this.zoom;
+    ctx.lineWidth = V2_SETTLEMENT_CONFIG.roads.width * this.zoom;
     ctx.stroke(path);
     ctx.restore();
   }

@@ -100,19 +100,30 @@ This project uses deterministic procedural generation with clear module boundari
 ## Experimental Sandbox
 
 - `src/v2/config.ts`
-  - Centralized V2 constants (zoom limits, contour sampling step, stage bounds, settlement sizing/clearances).
+  - Centralized V2 constants with stage-scoped settlement subsections (`siting`, `roads`, `housing`, `stage2`, `stage3`, `stage4`).
+  - Includes deterministic Stage 3 growth-profile tuning for village size variance.
 - `src/v2/terrain.ts`
   - Terrain-only elevation/slope prototype sampler (no water dependency).
 - `src/v2/generator.ts`
-  - Stepwise settlement prototype generator:
-  - Stage 0 terrain-only
-  - Stage 1 anchor house + trunk road
-  - Stage 2 iterative house growth from trunk
-  - Stage 3 Y-branches + shortcuts
-  - Stage 4 inter-village connectors + reuse-vs-new road decisions
-  - Current technical debt: this file is too large and must be split into focused generator submodules before adding major new behavior.
+  - Thin orchestrator/facade for staged settlement plan assembly and plan caching.
+- `src/v2/generator/site-selection.ts`
+  - Deterministic village site candidates, score filtering, and neighbor site queries.
+- `src/v2/generator/trunk.ts`
+  - Trunk and directional road primitives used by branch/connectors.
+- `src/v2/generator/housing.ts`
+  - Anchor placement and iterative house/drive growth along roads.
+- `src/v2/generator/branching.ts`
+  - Stage 3 branch road synthesis and fallback branch behavior.
+- `src/v2/generator/stage3-profile.ts`
+  - Deterministic per-site Stage 3 growth profile selection (`sparse`, `normal`, `dense`, `burst`) for branch/shortcut volume.
+- `src/v2/generator/shortcuts.ts`
+  - Stage 3 shortcut link synthesis between branch endpoints.
+- `src/v2/generator/inter-village.ts`
+  - Stage 4 deterministic trunk-to-trunk connector synthesis.
+- `src/v2/generator/geometry.ts`
+  - Shared road/segment geometry sampling, spacing checks, and alignment/reuse heuristics.
 - `src/v2/app.ts`
-  - Rendering and stage controls (`1-5` or `[ ]`) for visual verification.
+  - Rendering, stage controls (`1-5` or `[ ]`), and per-site stage metrics HUD (branches/shortcuts/connectors).
 
 ## Legacy
 

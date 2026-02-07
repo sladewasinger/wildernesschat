@@ -37,4 +37,9 @@ export type VillagePlan = {
   site: VillageSite;
   roads: RoadSegment[];
   houses: House[];
+  metrics: {
+    branchCount: number;
+    shortcutCount: number;
+    connectorCount: number;
+  };
 };

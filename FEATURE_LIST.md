@@ -193,10 +193,12 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Implement Y-branch + shortcut stage for organic local variation.
 - [x] Implement inter-village connector stage (deterministic trunk-to-trunk links).
 - [x] Add V2 centralized tuning constants for zoom/contour/sizing/clearance controls.
+- [x] Restructure V2 settlement tuning into stage-scoped config sections (`siting`/`roads`/`housing`/`stage2`/`stage3`/`stage4`).
 - [x] Add V2 road reuse-vs-new heuristic (parallel suppression + connector snap).
+- [x] Add deterministic Stage 3 growth profiles for variable local road density (`sparse`/`normal`/`dense`/`burst`).
 - [ ] Complete Stage 1-3 quality bar (no duplicate near-parallel branches, no local road tangles, stable spacing).
-- [ ] Refactor V2 generator into maintainable submodules (current `src/v2/generator.ts` is monolithic).
-- [ ] Add stage-observability HUD metrics (branches/shortcuts/connectors) to make Stage 4 effects explicit.
+- [x] Refactor V2 generator into maintainable submodules with a thin `src/v2/generator.ts` facade.
+- [x] Add stage-observability HUD metrics (branches/shortcuts/connectors) to make Stage 4 effects explicit.
 - [ ] Promote validated V2 systems into main pipeline incrementally.
 
 ## Progress Checklist
