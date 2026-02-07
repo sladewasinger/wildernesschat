@@ -1,5 +1,6 @@
 import { clamp, floorDiv, lerp } from "../util/math";
 import { V2SettlementGenerator } from "./generator";
+import { createManualHouseAt, createManualRoadBetweenHouses } from "./generator/manual-placement";
 import { V2TerrainSampler } from "./terrain";
 import { V2_RENDER_CONFIG, V2_SETTLEMENT_CONFIG, V2_STAGE_MAX, V2_STAGE_MIN, V2_VIEW_CONFIG } from "./config";
 import { House, Point, RoadSegment } from "./types";
@@ -34,6 +35,12 @@ export class V2App {
   private stage: number = 2;
   private zoom: number = V2_VIEW_CONFIG.defaultZoom;
   private currentTerrainWorldStep: number = V2_VIEW_CONFIG.terrainWorldStep;
+  private manualPlacementMode = true;
+  private readonly manualHouses: House[] = [];
+  private readonly manualRoads: RoadSegment[] = [];
+  private pointerInsideCanvas = false;
+  private mouseCanvasX = 0;
+  private mouseCanvasY = 0;
 
   constructor(canvas: HTMLCanvasElement, hud: HTMLElement, seed: string, initialStage: number, initialZoom: number) {
     this.canvas = canvas;
@@ -55,6 +62,9 @@ export class V2App {
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
     window.addEventListener("wheel", this.onWheel, { passive: false });
+    this.canvas.addEventListener("mousemove", this.onMouseMove);
+    this.canvas.addEventListener("mouseleave", this.onMouseLeave);
+    this.canvas.addEventListener("mousedown", this.onMouseDown);
     this.resize();
   }
 
@@ -86,6 +96,13 @@ export class V2App {
     if (event.key === "-" || event.key === "_") {
       this.zoom = clamp(this.zoom / V2_VIEW_CONFIG.keyZoomStep, V2_VIEW_CONFIG.minZoom, V2_VIEW_CONFIG.maxZoom);
     }
+    if (event.key === "m" || event.key === "M") {
+      this.manualPlacementMode = !this.manualPlacementMode;
+    }
+    if (this.manualPlacementMode && (event.key === "c" || event.key === "C")) {
+      this.manualHouses.length = 0;
+      this.manualRoads.length = 0;
+    }
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -101,6 +118,57 @@ export class V2App {
       this.zoom = clamp(this.zoom * V2_VIEW_CONFIG.wheelZoomStep, V2_VIEW_CONFIG.minZoom, V2_VIEW_CONFIG.maxZoom);
     } else if (event.deltaY > 0) {
       this.zoom = clamp(this.zoom / V2_VIEW_CONFIG.wheelZoomStep, V2_VIEW_CONFIG.minZoom, V2_VIEW_CONFIG.maxZoom);
+    }
+  };
+
+  private readonly onMouseMove = (event: MouseEvent): void => {
+    const rect = this.canvas.getBoundingClientRect();
+    const localX = event.clientX - rect.left;
+    const localY = event.clientY - rect.top;
+    if (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height) {
+      this.pointerInsideCanvas = false;
+      return;
+    }
+    const sx = rect.width <= 1e-6 ? 1 : this.canvas.width / rect.width;
+    const sy = rect.height <= 1e-6 ? 1 : this.canvas.height / rect.height;
+    this.pointerInsideCanvas = true;
+    this.mouseCanvasX = localX * sx;
+    this.mouseCanvasY = localY * sy;
+  };
+
+  private readonly onMouseLeave = (): void => {
+    this.pointerInsideCanvas = false;
+  };
+
+  private readonly onMouseDown = (event: MouseEvent): void => {
+    if (!this.manualPlacementMode || event.button !== 0) {
+      return;
+    }
+
+    const rect = this.canvas.getBoundingClientRect();
+    const localX = event.clientX - rect.left;
+    const localY = event.clientY - rect.top;
+    if (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height) {
+      return;
+    }
+    const sx = rect.width <= 1e-6 ? 1 : this.canvas.width / rect.width;
+    const sy = rect.height <= 1e-6 ? 1 : this.canvas.height / rect.height;
+    this.pointerInsideCanvas = true;
+    this.mouseCanvasX = localX * sx;
+    this.mouseCanvasY = localY * sy;
+
+    const preview = this.currentManualPreview();
+    if (!preview.house) {
+      return;
+    }
+    const newHouse = { ...preview.house, id: `mh-${this.manualHouses.length}` };
+    const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
+    this.manualHouses.push(newHouse);
+    if (previous) {
+      const road = createManualRoadBetweenHouses(`mr-${this.manualRoads.length}`, previous, newHouse, this.terrain);
+      if (road) {
+        this.manualRoads.push(road);
+      }
     }
   };
 
@@ -143,6 +211,49 @@ export class V2App {
     const viewMinY = this.playerY - viewHeight * 0.5;
 
     this.drawTerrain(ctx, width, height, viewMinX, viewMinY);
+
+    if (this.manualPlacementMode) {
+      const preview = this.currentManualPreview();
+      this.drawRoads(this.manualRoads, viewMinX, viewMinY);
+      if (preview.road) {
+        this.drawRoads([preview.road], viewMinX, viewMinY, 0.48);
+      }
+      this.drawHouses(this.manualHouses, viewMinX, viewMinY);
+      if (preview.house) {
+        this.drawHouses([preview.house], viewMinX, viewMinY, 0.5);
+      }
+      this.drawPlayerMarker(halfW, halfH);
+
+      const terrain = this.terrain.elevationAt(this.playerX, this.playerY);
+      const slope = this.terrain.slopeAt(this.playerX, this.playerY);
+      const hover = this.pointerInsideCanvas
+        ? this.screenToWorld(this.mouseCanvasX, this.mouseCanvasY)
+        : null;
+      const hoverElev = hover ? this.terrain.elevationAt(hover.x, hover.y) : null;
+      const hoverSlope = hover ? this.terrain.slopeAt(hover.x, hover.y) : null;
+      this.hud.textContent = [
+        "Village Generator V2 Sandbox",
+        "Manual placement mode: ON",
+        "Move: WASD / Arrows",
+        "Place house: Left click",
+        "Clear manual houses: C",
+        "Toggle manual mode: M",
+        "Stage keys still available for generator mode",
+        `Current stage: ${STAGE_LABELS[this.stage]}`,
+        `Seed: ${this.seed}`,
+        `Zoom: ${this.zoom.toFixed(2)}x`,
+        `Player px: ${this.playerX.toFixed(1)}, ${this.playerY.toFixed(1)}`,
+        `Chunk-ish: ${floorDiv(this.playerX, 320)}, ${floorDiv(this.playerY, 320)}`,
+        `Terrain@player: elev=${terrain.toFixed(3)} slope=${slope.toFixed(3)}`,
+        `Contour grid: ${this.currentTerrainWorldStep.toFixed(1)} world units`,
+        `Manual houses: ${this.manualHouses.length}`,
+        `Manual roads: ${this.manualRoads.length}`,
+        hover && hoverElev !== null && hoverSlope !== null
+          ? `Hover: x=${hover.x.toFixed(1)} y=${hover.y.toFixed(1)} elev=${hoverElev.toFixed(3)} slope=${hoverSlope.toFixed(3)}`
+          : "Hover: (move cursor over canvas)"
+      ].join("\n");
+      return;
+    }
 
     const margin = 360;
     const minX = this.playerX - viewWidth * 0.5 - margin;
@@ -187,13 +298,7 @@ export class V2App {
       );
     }
 
-    ctx.fillStyle = "#efe5c8";
-    ctx.beginPath();
-    ctx.arc(halfW, halfH, 5.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#1b2229";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    this.drawPlayerMarker(halfW, halfH);
 
     const terrain = this.terrain.elevationAt(this.playerX, this.playerY);
     const slope = this.terrain.slopeAt(this.playerX, this.playerY);
@@ -213,6 +318,40 @@ export class V2App {
       `Visible metrics: branches=${visibleBranchCount} shortcuts=${visibleShortcutCount} connectors=${visibleConnectorCount}`,
       ...(perSiteMetrics.length > 0 ? perSiteMetrics : ["Per-site metrics: none"])
     ].join("\n");
+  }
+
+  private currentManualPreview(): { house: House | null; road: RoadSegment | null } {
+    if (!this.pointerInsideCanvas) {
+      return { house: null, road: null };
+    }
+
+    const hover = this.screenToWorld(this.mouseCanvasX, this.mouseCanvasY);
+    const house = createManualHouseAt("preview", hover.x, hover.y, this.terrain);
+    const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
+    const road = previous ? createManualRoadBetweenHouses("preview-road", previous, house, this.terrain) : null;
+    return { house, road };
+  }
+
+  private screenToWorld(canvasX: number, canvasY: number): Point {
+    const viewWidth = this.canvas.width / this.zoom;
+    const viewHeight = this.canvas.height / this.zoom;
+    const viewMinX = this.playerX - viewWidth * 0.5;
+    const viewMinY = this.playerY - viewHeight * 0.5;
+    return {
+      x: viewMinX + canvasX / this.zoom,
+      y: viewMinY + canvasY / this.zoom
+    };
+  }
+
+  private drawPlayerMarker(screenX: number, screenY: number): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = "#efe5c8";
+    ctx.beginPath();
+    ctx.arc(screenX, screenY, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#1b2229";
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 
   private drawTerrain(ctx: CanvasRenderingContext2D, width: number, height: number, viewMinX: number, viewMinY: number): void {
@@ -249,7 +388,7 @@ export class V2App {
     }
   }
 
-  private drawRoads(roads: RoadSegment[], viewMinX: number, viewMinY: number): void {
+  private drawRoads(roads: RoadSegment[], viewMinX: number, viewMinY: number, alpha = 1): void {
     const path = new Path2D();
     for (const road of roads) {
       if (road.points.length < 2) {
@@ -269,6 +408,7 @@ export class V2App {
 
     const ctx = this.ctx;
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = V2_RENDER_CONFIG.roadOutlineColor;
@@ -280,13 +420,13 @@ export class V2App {
     ctx.restore();
   }
 
-  private drawHouses(houses: House[], viewMinX: number, viewMinY: number): void {
+  private drawHouses(houses: House[], viewMinX: number, viewMinY: number, alpha = 1): void {
     for (const house of houses) {
-      this.drawHouse(house, viewMinX, viewMinY);
+      this.drawHouse(house, viewMinX, viewMinY, alpha);
     }
   }
 
-  private drawHouse(house: House, viewMinX: number, viewMinY: number): void {
+  private drawHouse(house: House, viewMinX: number, viewMinY: number, alpha = 1): void {
     const x = (house.x - viewMinX) * this.zoom;
     const y = (house.y - viewMinY) * this.zoom;
     const angle = house.angle;
@@ -321,6 +461,8 @@ export class V2App {
     const roofDark = this.roofColor(house.tone, false);
 
     const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = "rgba(24, 32, 38, 0.35)";
     this.fillPolygon(
       corners.map((corner) => ({
@@ -333,6 +475,7 @@ export class V2App {
     this.fillPolygon(topHalf, topIsLight ? roofLight : roofDark);
     this.fillPolygon(bottomHalf, topIsLight ? roofDark : roofLight);
     this.strokePolygon(corners, "rgba(11, 15, 16, 0.94)", Math.max(1.3, 2 * this.zoom));
+    ctx.restore();
   }
 
   private roofColor(tone: number, light: boolean): string {

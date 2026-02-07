@@ -41,11 +41,11 @@ export const V2_SETTLEMENT_CONFIG = {
       threshold: 0.8
     },
     houseFirst: {
-      targetHouseCount: 5,
-      candidateAttempts: 120,
-      roadNodeOffset: 9,
-      clusterRadiusMin: 84,
-      clusterRadiusMax: 188,
+      targetHouseCount: 2,
+      candidateAttempts: 260,
+      roadNodeOffset: 12,
+      clusterRadiusMin: 132,
+      clusterRadiusMax: 236,
       clusterSpacingPaddingExtra: 10,
       roadsideInfillMaxHouses: 3,
       roadsideInfillSlotCount: 4,
