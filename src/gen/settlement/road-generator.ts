@@ -2,6 +2,7 @@ import { clamp, lerp } from "../../util/math";
 import { WorldConfig } from "../config";
 import { hashCoords, hashString, hashToUnit } from "../hash";
 import { TerrainSampler } from "../terrain";
+import { localBranchRoadId, localSpokeRoadId, regionalRoadId, roadEdgeKey } from "./stable-ids";
 import { Road, RoadType, Village } from "./types";
 
 type EdgeCandidate = {
@@ -95,7 +96,7 @@ export class RoadGenerator {
       const count = Math.min(this.config.roads.nearestNeighbors, nearest.length);
       for (let k = 0; k < count; k += 1) {
         const b = nearest[k].village;
-        const id = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+        const id = roadEdgeKey(a.id, b.id);
         if (!edgeById.has(id)) {
           const distance = nearest[k].distance;
           const weight = this.estimateConnectionCost(a, b, distance);
@@ -141,7 +142,7 @@ export class RoadGenerator {
       const type: RoadType = edge.distance > this.config.roads.maxConnectionDistance * 0.55 ? "major" : "minor";
       const width = type === "major" ? this.config.roads.majorWidth : this.config.roads.minorWidth;
       roads.push({
-        id: `r-${edge.id}`,
+        id: regionalRoadId(edge.id),
         type,
         width,
         points: this.routeRoad(edge.a, edge.b, edge.id),
@@ -153,110 +154,278 @@ export class RoadGenerator {
     return roads;
   }
 
-  buildLocalRoadNetwork(villages: Village[]): Road[] {
+  buildLocalRoadNetwork(villages: Village[], regionalRoads: Road[]): Road[] {
     const roads: Road[] = [];
+    const existingRoads: Road[] = [...regionalRoads];
 
     for (const village of villages) {
       const localSeed = hashString(`${this.config.seed}:local-road:${village.id}`);
-      const spokeCount = 4 + Math.floor(hashToUnit(hashCoords(localSeed, village.cellX, village.cellY, 71)) * 3);
-      const baseAngle = hashToUnit(hashCoords(localSeed, village.cellX, village.cellY, 83)) * Math.PI * 2;
-      const spokeEndpoints: { x: number; y: number; angle: number }[] = [];
+      const baseAngle = this.estimateVillageAxis(village, regionalRoads, localSeed);
+      const axisX = Math.cos(baseAngle);
+      const axisY = Math.sin(baseAngle);
+      const perpX = -axisY;
+      const perpY = axisX;
+      const spacing = clamp(village.radius * 0.5, 24, 44);
+      const duplicateThreshold = Math.max(7, spacing * 0.34);
 
-      for (let spoke = 0; spoke < spokeCount; spoke += 1) {
-        const angleJitter = (hashToUnit(hashCoords(localSeed, spoke, 0, 97)) * 2 - 1) * 0.42;
-        const angle = baseAngle + (spoke / spokeCount) * Math.PI * 2 + angleJitter;
-        const length = village.radius * lerp(1.45, 2.45, hashToUnit(hashCoords(localSeed, spoke, 0, 101)));
-        const segments = 4 + Math.floor(hashToUnit(hashCoords(localSeed, spoke, 0, 109)) * 3);
-        const points: { x: number; y: number }[] = [];
-
-        for (let i = 0; i <= segments; i += 1) {
-          const t = i / segments;
-          const wobble = Math.sin(t * Math.PI) * (hashToUnit(hashCoords(localSeed, spoke, i, 131)) * 2 - 1) * 18;
-          points.push({
-            x: village.x + Math.cos(angle) * length * t + Math.cos(angle + Math.PI * 0.5) * wobble,
-            y: village.y + Math.sin(angle) * length * t + Math.sin(angle + Math.PI * 0.5) * wobble
-          });
-        }
-
-        points[0] = { x: village.x, y: village.y };
-        this.smoothLine(points, 1);
-        if (!this.isRoadLineValid(points)) {
-          continue;
-        }
-
-        roads.push({
-          id: `rl-${village.id}-${spoke}`,
-          type: "local",
-          width: this.config.roads.localWidth,
-          points,
-          fromVillageId: village.id,
-          toVillageId: village.id
-        });
-
-        const end = points[points.length - 1];
-        spokeEndpoints.push({ x: end.x, y: end.y, angle });
-
-        const sideStreetCount = 1 + Math.floor(hashToUnit(hashCoords(localSeed, spoke, 0, 149)) * 2);
-        for (let branchIndex = 0; branchIndex < sideStreetCount; branchIndex += 1) {
-          const t = lerp(0.35, 0.88, hashToUnit(hashCoords(localSeed, spoke, branchIndex, 157)));
-          const centerX = lerp(village.x, end.x, t);
-          const centerY = lerp(village.y, end.y, t);
-          const branchLen = village.radius * lerp(0.55, 1.15, hashToUnit(hashCoords(localSeed, spoke, branchIndex, 163)));
-          const sideSign = hashToUnit(hashCoords(localSeed, spoke, branchIndex, 167)) > 0.5 ? 1 : -1;
-          const perpAngle = angle + sideSign * Math.PI * 0.5;
-          const branchSegments = 3 + Math.floor(hashToUnit(hashCoords(localSeed, spoke, branchIndex, 173)) * 2);
-          const branchPoints: { x: number; y: number }[] = [{ x: centerX, y: centerY }];
-
-          for (let s = 1; s <= branchSegments; s += 1) {
-            const bt = s / branchSegments;
-            const drift = (hashToUnit(hashCoords(localSeed, spoke, branchIndex * 13 + s, 179)) * 2 - 1) * 9 * bt;
-            branchPoints.push({
-              x: centerX + Math.cos(perpAngle) * branchLen * bt + Math.cos(angle) * drift,
-              y: centerY + Math.sin(perpAngle) * branchLen * bt + Math.sin(angle) * drift
-            });
-          }
-
-          if (!this.isRoadLineValid(branchPoints)) {
-            continue;
-          }
-
-          roads.push({
-            id: `rlb-${village.id}-${spoke}-${branchIndex}`,
+      const nearestRegional = this.nearestRegionalRoadToVillage(village, regionalRoads);
+      if (nearestRegional && nearestRegional.distance < village.radius * 1.8) {
+        const connectorPoints = this.createConnectorLine(
+          village.x,
+          village.y,
+          nearestRegional.pointX,
+          nearestRegional.pointY,
+          hashToUnit(hashCoords(localSeed, 991, 0, 911))
+        );
+        if (
+          this.isRoadLineValid(connectorPoints) &&
+          this.isRoadLineDistinct(connectorPoints, existingRoads, Math.max(6, this.config.roads.localWidth * 2.5))
+        ) {
+          const connectorRoad: Road = {
+            id: localSpokeRoadId(village.id, 0),
             type: "local",
-            width: this.config.roads.localWidth * 0.9,
-            points: branchPoints,
+            width: this.config.roads.localWidth,
+            points: connectorPoints,
             fromVillageId: village.id,
             toVillageId: village.id
-          });
+          };
+          roads.push(connectorRoad);
+          existingRoads.push(connectorRoad);
         }
       }
 
-      if (spokeEndpoints.length >= 4) {
-        spokeEndpoints.sort((a, b) => a.angle - b.angle);
-        const loopPoints: { x: number; y: number }[] = [];
-        for (let i = 0; i < spokeEndpoints.length; i += 1) {
-          const endpoint = spokeEndpoints[i];
-          const t = hashToUnit(hashCoords(localSeed, i, spokeEndpoints.length, 191));
-          loopPoints.push({
-            x: lerp(village.x, endpoint.x, 0.72 + t * 0.2),
-            y: lerp(village.y, endpoint.y, 0.72 + t * 0.2)
-          });
+      const laneOffsets = village.radius > 86 ? [-0.85, 0, 0.85] : [-0.55, 0];
+      let laneIndex = 1;
+      for (const laneOffset of laneOffsets) {
+        const laneRoll = hashToUnit(hashCoords(localSeed, laneOffset + 7, 0, 433));
+        const line = this.createStreetLine(
+          village.x,
+          village.y,
+          axisX,
+          axisY,
+          perpX,
+          perpY,
+          village.radius * lerp(1.35, 1.95, laneRoll),
+          laneOffset * spacing,
+          laneRoll
+        );
+        if (!this.isRoadLineValid(line) || !this.isRoadLineDistinct(line, existingRoads, duplicateThreshold)) {
+          continue;
         }
-        loopPoints.push(loopPoints[0]);
-        if (this.isRoadLineValid(loopPoints)) {
-          roads.push({
-            id: `rlloop-${village.id}`,
-            type: "local",
-            width: this.config.roads.localWidth,
-            points: loopPoints,
-            fromVillageId: village.id,
-            toVillageId: village.id
-          });
+        const laneRoad: Road = {
+          id: localSpokeRoadId(village.id, laneIndex),
+          type: "local",
+          width: this.config.roads.localWidth,
+          points: line,
+          fromVillageId: village.id,
+          toVillageId: village.id
+        };
+        roads.push(laneRoad);
+        existingRoads.push(laneRoad);
+        laneIndex += 1;
+      }
+
+      const crossOffsets = village.radius > 92 ? [-0.45, 0.45] : [0];
+      for (let i = 0; i < crossOffsets.length; i += 1) {
+        const crossRoll = hashToUnit(hashCoords(localSeed, i, 0, 541));
+        if (crossOffsets.length > 1 && crossRoll < 0.22) {
+          continue;
         }
+        const line = this.createStreetLine(
+          village.x,
+          village.y,
+          perpX,
+          perpY,
+          axisX,
+          axisY,
+          village.radius * lerp(0.95, 1.45, crossRoll),
+          crossOffsets[i] * spacing * 1.2,
+          crossRoll
+        );
+        if (!this.isRoadLineValid(line) || !this.isRoadLineDistinct(line, existingRoads, duplicateThreshold)) {
+          continue;
+        }
+        const branchRoad: Road = {
+          id: localBranchRoadId(village.id, i, 0),
+          type: "local",
+          width: this.config.roads.localWidth * 0.92,
+          points: line,
+          fromVillageId: village.id,
+          toVillageId: village.id
+        };
+        roads.push(branchRoad);
+        existingRoads.push(branchRoad);
       }
     }
 
     return roads;
+  }
+
+  private estimateVillageAxis(village: Village, regionalRoads: Road[], localSeed: number): number {
+    const nearest = this.nearestRegionalRoadToVillage(village, regionalRoads);
+    if (nearest) {
+      return Math.atan2(nearest.tangentY, nearest.tangentX);
+    }
+    return hashToUnit(hashCoords(localSeed, village.cellX, village.cellY, 83)) * Math.PI * 2;
+  }
+
+  private nearestRegionalRoadToVillage(
+    village: Village,
+    regionalRoads: Road[]
+  ): { distance: number; tangentX: number; tangentY: number; pointX: number; pointY: number } | null {
+    let bestDistance = Number.POSITIVE_INFINITY;
+    let bestTangentX = 1;
+    let bestTangentY = 0;
+    let bestPointX = village.x;
+    let bestPointY = village.y;
+
+    for (const road of regionalRoads) {
+      if (road.points.length < 2) {
+        continue;
+      }
+      for (let i = 1; i < road.points.length; i += 1) {
+        const a = road.points[i - 1];
+        const b = road.points[i];
+        const closest = this.closestPointOnSegment(village.x, village.y, a.x, a.y, b.x, b.y);
+        if (closest.distance >= bestDistance) {
+          continue;
+        }
+        bestDistance = closest.distance;
+        bestPointX = closest.x;
+        bestPointY = closest.y;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const length = Math.hypot(dx, dy);
+        if (length > 1e-6) {
+          bestTangentX = dx / length;
+          bestTangentY = dy / length;
+        }
+      }
+    }
+
+    if (!Number.isFinite(bestDistance)) {
+      return null;
+    }
+    return {
+      distance: bestDistance,
+      tangentX: bestTangentX,
+      tangentY: bestTangentY,
+      pointX: bestPointX,
+      pointY: bestPointY
+    };
+  }
+
+  private createStreetLine(
+    centerX: number,
+    centerY: number,
+    axisX: number,
+    axisY: number,
+    normalX: number,
+    normalY: number,
+    halfLength: number,
+    offset: number,
+    jitterRoll: number
+  ): { x: number; y: number }[] {
+    const wobble = (jitterRoll * 2 - 1) * halfLength * 0.12;
+    const coreX = centerX + normalX * offset;
+    const coreY = centerY + normalY * offset;
+    const start = {
+      x: coreX - axisX * halfLength + normalX * wobble,
+      y: coreY - axisY * halfLength + normalY * wobble
+    };
+    const end = {
+      x: coreX + axisX * halfLength - normalX * wobble,
+      y: coreY + axisY * halfLength - normalY * wobble
+    };
+    const mid = {
+      x: coreX + normalX * wobble * 0.4,
+      y: coreY + normalY * wobble * 0.4
+    };
+    return [start, mid, end];
+  }
+
+  private createConnectorLine(startX: number, startY: number, endX: number, endY: number, jitterRoll: number): { x: number; y: number }[] {
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 1e-6) {
+      return [{ x: startX, y: startY }, { x: endX, y: endY }];
+    }
+    const tangentX = dx / distance;
+    const tangentY = dy / distance;
+    const normalX = -tangentY;
+    const normalY = tangentX;
+    const wobble = (jitterRoll * 2 - 1) * Math.min(18, distance * 0.18);
+
+    return [
+      { x: startX, y: startY },
+      {
+        x: lerp(startX, endX, 0.5) + normalX * wobble,
+        y: lerp(startY, endY, 0.5) + normalY * wobble
+      },
+      { x: endX, y: endY }
+    ];
+  }
+
+  private closestPointOnSegment(
+    px: number,
+    py: number,
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number
+  ): { x: number; y: number; distance: number } {
+    const vx = bx - ax;
+    const vy = by - ay;
+    const lenSq = vx * vx + vy * vy;
+    if (lenSq <= 1e-6) {
+      const dx = px - ax;
+      const dy = py - ay;
+      return { x: ax, y: ay, distance: Math.hypot(dx, dy) };
+    }
+    const t = clamp(((px - ax) * vx + (py - ay) * vy) / lenSq, 0, 1);
+    const x = ax + vx * t;
+    const y = ay + vy * t;
+    return { x, y, distance: Math.hypot(px - x, py - y) };
+  }
+
+  private isRoadLineDistinct(points: { x: number; y: number }[], existingRoads: Road[], minDistance: number): boolean {
+    if (points.length < 2) {
+      return false;
+    }
+
+    const start = points[0];
+    const end = points[points.length - 1];
+    const lineDx = end.x - start.x;
+    const lineDy = end.y - start.y;
+    const lineLength = Math.hypot(lineDx, lineDy);
+    if (lineLength <= 1e-6) {
+      return false;
+    }
+
+    const midPoint = points[Math.floor(points.length * 0.5)];
+    for (const road of existingRoads) {
+      for (let i = 1; i < road.points.length; i += 1) {
+        const a = road.points[i - 1];
+        const b = road.points[i];
+        const segDx = b.x - a.x;
+        const segDy = b.y - a.y;
+        const segLength = Math.hypot(segDx, segDy);
+        if (segLength <= 1e-6) {
+          continue;
+        }
+        const alignment = Math.abs((lineDx * segDx + lineDy * segDy) / (lineLength * segLength));
+        if (alignment < 0.86) {
+          continue;
+        }
+        const midpointDistance = this.closestPointOnSegment(midPoint.x, midPoint.y, a.x, a.y, b.x, b.y).distance;
+        if (midpointDistance <= minDistance) {
+          return false;
+        }
+      }
+    }
+
+    return true;
   }
 
   private estimateConnectionCost(a: Village, b: Village, distance: number): number {
@@ -347,4 +516,3 @@ export class RoadGenerator {
     return true;
   }
 }
-

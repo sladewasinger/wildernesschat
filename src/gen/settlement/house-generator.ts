@@ -1,7 +1,8 @@
 import { lerp } from "../../util/math";
 import { WorldConfig } from "../config";
-import { hashCoords, hashToUnit } from "../hash";
+import { hashCoords, hashString, hashToUnit } from "../hash";
 import { TerrainSampler } from "../terrain";
+import { houseIdForParcel } from "./stable-ids";
 import { House, Parcel } from "./types";
 
 export class HouseGenerator {
@@ -19,7 +20,7 @@ export class HouseGenerator {
     const houses: House[] = [];
 
     for (const parcel of parcels) {
-      const localSeed = this.houseSeed ^ hashCoords(this.houseSeed, parcel.x | 0, parcel.y | 0, 71);
+      const localSeed = this.houseSeed ^ hashString(parcel.id);
       if (!this.shouldPlaceHouse(parcel, localSeed)) {
         continue;
       }
@@ -40,7 +41,7 @@ export class HouseGenerator {
       const roofStyle = Math.floor(hashToUnit(hashCoords(localSeed, 7, 11, 97)) * 4);
 
       houses.push({
-        id: `h-${parcel.id}`,
+        id: houseIdForParcel(parcel.id),
         x,
         y,
         width,
@@ -64,4 +65,3 @@ export class HouseGenerator {
     return roll <= chance;
   }
 }
-

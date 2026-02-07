@@ -2,6 +2,7 @@ import { clamp, lerp, smoothstep } from "../../util/math";
 import { WorldConfig } from "../config";
 import { hashCoords, hashToUnit, mixUint32 } from "../hash";
 import { TerrainSampler } from "../terrain";
+import { villageIdForCell } from "./stable-ids";
 import { Village } from "./types";
 
 type VillageCandidate = {
@@ -135,7 +136,7 @@ export class VillageGenerator {
     }
 
     const candidate: VillageCandidate = {
-      id: `v-${cellX},${cellY}`,
+      id: villageIdForCell(cellX, cellY),
       cellX,
       cellY,
       x,
@@ -202,4 +203,3 @@ export class VillageGenerator {
     }
   }
 }
-

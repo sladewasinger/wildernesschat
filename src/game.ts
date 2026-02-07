@@ -86,6 +86,7 @@ export class Game {
     const speed = 210;
     this.playerX += moveX * speed * dt;
     this.playerY += moveY * speed * dt;
+    this.world.advanceGenerationBudget();
   }
 
   private render(): void {
@@ -112,6 +113,8 @@ export class Game {
 
     const sample = this.world.sampleAt(this.playerX, this.playerY);
     const debug = this.world.getDebugLayers();
+    const generation = this.world.getGenerationStats();
+    const handshake = this.world.getWorldHandshake();
 
     ctx.fillStyle = "#f4eec7";
     ctx.beginPath();
@@ -122,16 +125,18 @@ export class Game {
     ctx.stroke();
 
     this.hud.textContent = [
-      "Organic village generator (phase 0-4 parcels)",
+      "Organic village generator (phase 0-7 systems implemented)",
       "Move: WASD / Arrows",
       "Debug: 1 water 2 moisture 3 forest 4 contours 5 rivers 6 roads 7 villages 8 houses 9 parcels",
       "Mask modes (1/2/3) hide roads/parcels/houses/trees for readability",
       `Seed: ${this.world.getSeed()}`,
+      `Handshake: v${handshake.protocolVersion} hash=${handshake.configHash}`,
       `Player px: ${this.playerX.toFixed(1)}, ${this.playerY.toFixed(1)}`,
       `Chunk: ${floorDiv(this.playerX, chunkSize)}, ${floorDiv(this.playerY, chunkSize)}`,
       `Elev: ${sample.elevation.toFixed(3)} Moisture: ${sample.moisture.toFixed(3)}`,
       `Slope: ${sample.slope.toFixed(3)} Forest: ${sample.forestDensity.toFixed(3)}`,
       `Water depth: ${sample.waterDepth.toFixed(3)}`,
+      `Streaming: pendingChunks=${generation.pendingChunks} seamWarnings=${generation.seamWarnings}`,
       `Layers: water=${debug.showWaterMask ? "on" : "off"} moisture=${debug.showMoisture ? "on" : "off"} forest=${debug.showForestMask ? "on" : "off"} contours=${debug.showContours ? "on" : "off"} rivers=${debug.showRivers ? "on" : "off"} roads=${debug.showRoads ? "on" : "off"} villages=${debug.showVillages ? "on" : "off"} parcels=${debug.showParcels ? "on" : "off"} houses=${debug.showHouses ? "on" : "off"}`
     ].join("\n");
   }

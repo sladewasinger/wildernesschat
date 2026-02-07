@@ -1,40 +1,46 @@
-import { clamp, floorDiv, lerp, smoothstep } from "../util/math";
 import { DebugLayerConfig, WorldConfig } from "../gen/config";
-import { hashCoords, hashString, hashToUnit, mixUint32 } from "../gen/hash";
+import { hashString } from "../gen/hash";
 import { RiverSystem } from "../gen/rivers";
-import { House, Parcel, SettlementFeatures, SettlementSystem, Village } from "../gen/settlements";
+import { SettlementSystem } from "../gen/settlements";
 import { TerrainProbe, TerrainSampler, createTerrainSampler } from "../gen/terrain";
+import { buildWorldHandshake, serializeWorldHandshake, WorldHandshake } from "../net/handshake";
+import { ChunkRenderer } from "./render/chunk-renderer";
+import { ChunkSeamValidator } from "./render/chunk-seam-validator";
 
 type Chunk = {
   x: number;
   y: number;
   canvas: HTMLCanvasElement;
+  status: "pending" | "ready";
 };
 
 const chunkKey = (x: number, y: number): string => `${x},${y}`;
-
-const toByte = (value: number): number => {
-  return Math.max(0, Math.min(255, Math.round(value)));
-};
+const nowMs = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
 export class World {
   private readonly config: WorldConfig;
   private readonly terrain: TerrainSampler;
-  private readonly rivers: RiverSystem;
-  private readonly settlements: SettlementSystem;
-  private readonly seedHash: number;
-  private readonly treeSeed: number;
+  private readonly chunkRenderer: ChunkRenderer;
+  private readonly seamValidator: ChunkSeamValidator;
+  private readonly placeholderCanvas: HTMLCanvasElement;
   private readonly chunkCache = new Map<string, Chunk>();
+  private readonly pendingQueue: string[] = [];
+  private readonly pendingSet = new Set<string>();
   private readonly debug: DebugLayerConfig;
 
   constructor(config: WorldConfig) {
     this.config = config;
     this.terrain = createTerrainSampler(config);
-    this.rivers = new RiverSystem(config, this.terrain);
-    this.settlements = new SettlementSystem(config, this.terrain);
-    this.seedHash = hashString(`${config.seed}:surface`);
-    this.treeSeed = hashString(`${config.seed}:trees`);
+    const rivers = new RiverSystem(config, this.terrain);
+    const settlements = new SettlementSystem(config, this.terrain);
     this.debug = { ...config.debug };
+
+    const seedHash = hashString(`${config.seed}:surface`);
+    const treeSeed = hashString(`${config.seed}:trees`);
+    const fieldSeed = hashString(`${config.seed}:fields`);
+    this.chunkRenderer = new ChunkRenderer(config, this.terrain, rivers, settlements, this.debug, seedHash, treeSeed, fieldSeed);
+    this.seamValidator = new ChunkSeamValidator(config);
+    this.placeholderCanvas = this.createPlaceholderChunkCanvas(config.chunk.pixelSize);
   }
 
   getSeed(): string {
@@ -52,10 +58,55 @@ export class World {
   toggleDebugLayer(layer: keyof DebugLayerConfig): void {
     this.debug[layer] = !this.debug[layer];
     this.chunkCache.clear();
+    this.pendingSet.clear();
+    this.pendingQueue.length = 0;
   }
 
   sampleAt(worldX: number, worldY: number): TerrainProbe {
     return this.terrain.probe(worldX, worldY);
+  }
+
+  getWorldHandshake(): WorldHandshake {
+    return buildWorldHandshake(this.config);
+  }
+
+  getSerializedWorldHandshake(): string {
+    return serializeWorldHandshake(this.getWorldHandshake());
+  }
+
+  advanceGenerationBudget(): void {
+    const budgetMs = Math.max(0.2, this.config.chunk.generationBudgetMs);
+    const maxBuilds = Math.max(1, this.config.chunk.maxChunkBuildsPerFrame | 0);
+    const start = nowMs();
+    let built = 0;
+
+    while (built < maxBuilds && this.pendingQueue.length > 0) {
+      if (nowMs() - start > budgetMs) {
+        break;
+      }
+      const key = this.pendingQueue.shift();
+      if (!key) {
+        break;
+      }
+      this.pendingSet.delete(key);
+      const chunk = this.chunkCache.get(key);
+      if (!chunk || chunk.status === "ready") {
+        continue;
+      }
+
+      chunk.canvas = this.chunkRenderer.renderChunk(chunk.x, chunk.y);
+      chunk.status = "ready";
+      built += 1;
+
+      this.seamValidator.validate(chunk.x, chunk.y, this.getReadyChunkCanvas);
+    }
+  }
+
+  getGenerationStats(): { pendingChunks: number; seamWarnings: number } {
+    return {
+      pendingChunks: this.pendingSet.size,
+      seamWarnings: this.seamValidator.getWarningCount()
+    };
   }
 
   getChunkCanvas(chunkX: number, chunkY: number): HTMLCanvasElement {
@@ -72,11 +123,21 @@ export class World {
     const chunk: Chunk = {
       x: chunkX,
       y: chunkY,
-      canvas: this.renderChunk(chunkX, chunkY)
+      canvas: this.placeholderCanvas,
+      status: "pending"
     };
     this.chunkCache.set(key, chunk);
+    this.enqueueChunkGeneration(key);
     this.pruneCache();
     return chunk;
+  }
+
+  private enqueueChunkGeneration(key: string): void {
+    if (this.pendingSet.has(key)) {
+      return;
+    }
+    this.pendingSet.add(key);
+    this.pendingQueue.push(key);
   }
 
   private pruneCache(): void {
@@ -84,6 +145,7 @@ export class World {
     if (this.chunkCache.size <= max) {
       return;
     }
+
     const overflow = this.chunkCache.size - max;
     const keys = this.chunkCache.keys();
     for (let i = 0; i < overflow; i += 1) {
@@ -91,412 +153,40 @@ export class World {
       if (next.done) {
         break;
       }
-      this.chunkCache.delete(next.value);
+      const key = next.value;
+      this.chunkCache.delete(key);
+      this.pendingSet.delete(key);
     }
   }
 
-  private renderChunk(chunkX: number, chunkY: number): HTMLCanvasElement {
-    const chunkSize = this.getChunkSize();
-    const step = Math.max(1, this.config.chunk.sampleStep | 0);
-    const startX = chunkX * chunkSize;
-    const startY = chunkY * chunkSize;
+  private readonly getReadyChunkCanvas = (chunkX: number, chunkY: number): HTMLCanvasElement | null => {
+    const chunk = this.chunkCache.get(chunkKey(chunkX, chunkY));
+    if (!chunk || chunk.status !== "ready") {
+      return null;
+    }
+    return chunk.canvas;
+  };
+
+  private createPlaceholderChunkCanvas(size: number): HTMLCanvasElement {
     const canvas = document.createElement("canvas");
-    canvas.width = chunkSize;
-    canvas.height = chunkSize;
+    canvas.width = size;
+    canvas.height = size;
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      throw new Error("2D canvas context unavailable.");
-    }
-
-    if (step === 1) {
-      const image = ctx.createImageData(chunkSize, chunkSize);
-      const data = image.data;
-      let cursor = 0;
-      for (let y = 0; y < chunkSize; y += 1) {
-        for (let x = 0; x < chunkSize; x += 1) {
-          const worldX = startX + x;
-          const worldY = startY + y;
-          const terrain = this.terrain.sample(worldX, worldY);
-          const color = this.sampleColor(worldX, worldY, terrain);
-          data[cursor] = toByte(color.r);
-          data[cursor + 1] = toByte(color.g);
-          data[cursor + 2] = toByte(color.b);
-          data[cursor + 3] = 255;
-          cursor += 4;
-        }
-      }
-      ctx.putImageData(image, 0, 0);
-    } else {
-      for (let y = 0; y < chunkSize; y += step) {
-        for (let x = 0; x < chunkSize; x += step) {
-          const sampleX = startX + x + step * 0.5;
-          const sampleY = startY + y + step * 0.5;
-          const terrain = this.terrain.sample(sampleX, sampleY);
-          const color = this.sampleColor(sampleX, sampleY, terrain);
-          ctx.fillStyle = `rgb(${toByte(color.r)} ${toByte(color.g)} ${toByte(color.b)})`;
-          ctx.fillRect(x, y, Math.min(step, chunkSize - x), Math.min(step, chunkSize - y));
-        }
-      }
-    }
-    const maskMode = this.debug.showWaterMask || this.debug.showMoisture || this.debug.showForestMask;
-    if (maskMode) {
-      if (this.debug.showRivers) {
-        this.drawRivers(ctx, startX, startY, chunkSize);
-      }
       return canvas;
     }
 
-    this.drawRivers(ctx, startX, startY, chunkSize);
-    const featureMargin = 140;
-    const features = this.settlements.getFeaturesForBounds(
-      startX - featureMargin,
-      startX + chunkSize + featureMargin,
-      startY - featureMargin,
-      startY + chunkSize + featureMargin
-    );
-    this.drawRoadsAndVillages(ctx, startX, startY, features);
-    this.drawParcels(ctx, startX, startY, features.parcels);
-    this.drawHouses(ctx, startX, startY, features);
-    this.drawForest(ctx, startX, startY, chunkSize);
+    ctx.fillStyle = "#8fa486";
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = "rgba(65, 76, 60, 0.36)";
+    ctx.lineWidth = 1;
+    const spacing = 16;
+    for (let i = -size; i < size * 2; i += spacing) {
+      ctx.beginPath();
+      ctx.moveTo(i, 0);
+      ctx.lineTo(i - size, size);
+      ctx.stroke();
+    }
     return canvas;
-  }
-
-  private sampleColor(
-    worldX: number,
-    worldY: number,
-    terrain: { elevation: number; moisture: number; waterDepth: number; shore: number }
-  ): { r: number; g: number; b: number } {
-    if (this.debug.showWaterMask) {
-      if (terrain.waterDepth > 0.001) {
-        return { r: 84, g: 144, b: 212 };
-      }
-      if (terrain.shore > 0.48) {
-        return { r: 188, g: 210, b: 175 };
-      }
-      return { r: 159, g: 191, b: 145 };
-    }
-
-    if (this.debug.showMoisture) {
-      const moisture = clamp(terrain.moisture, 0, 1);
-      if (moisture < 0.33) {
-        const t = moisture / 0.33;
-        return {
-          r: lerp(25, 52, t),
-          g: lerp(45, 122, t),
-          b: lerp(120, 112, t)
-        };
-      }
-      if (moisture < 0.66) {
-        const t = (moisture - 0.33) / 0.33;
-        return {
-          r: lerp(52, 116, t),
-          g: lerp(122, 178, t),
-          b: lerp(112, 64, t)
-        };
-      }
-      const t = (moisture - 0.66) / 0.34;
-      return {
-        r: lerp(116, 222, t),
-        g: lerp(178, 201, t),
-        b: lerp(64, 78, t)
-      };
-    }
-
-    if (this.debug.showForestMask) {
-      const density = this.terrain.forestDensityAt(worldX, worldY);
-      return {
-        r: lerp(18, 95, density),
-        g: lerp(27, 198, density),
-        b: lerp(22, 74, density)
-      };
-    }
-
-    const noiseGrain = (hashToUnit(hashCoords(this.seedHash, worldX, worldY, 77)) - 0.5) * 7;
-
-    if (terrain.waterDepth > 0) {
-      return {
-        r: 83,
-        g: 143,
-        b: 211
-      };
-    }
-
-    const elevationTone = smoothstep(0.18, 0.87, terrain.elevation);
-    const moistureTone = smoothstep(0.1, 0.92, terrain.moisture);
-    let r = lerp(132, 173, elevationTone) - moistureTone * 17;
-    let g = lerp(167, 196, elevationTone) - moistureTone * 11;
-    let b = lerp(122, 156, elevationTone) - moistureTone * 18;
-
-    if (this.debug.showContours && this.config.terrain.contourInterval > 0) {
-      const contourValue = (terrain.elevation / this.config.terrain.contourInterval) % 1;
-      if (contourValue < this.config.terrain.contourStrength) {
-        r -= 18;
-        g -= 18;
-        b -= 18;
-      }
-    }
-
-    const shoreBlend = terrain.shore * 0.42;
-    r = lerp(r, 193, shoreBlend);
-    g = lerp(g, 198, shoreBlend);
-    b = lerp(b, 165, shoreBlend);
-
-    r += noiseGrain;
-    g += noiseGrain;
-    b += noiseGrain;
-    return { r, g, b };
-  }
-
-  private drawRivers(ctx: CanvasRenderingContext2D, startX: number, startY: number, chunkSize: number): void {
-    if (!this.debug.showRivers) {
-      return;
-    }
-
-    const margin = 28;
-    const minX = startX - margin;
-    const maxX = startX + chunkSize + margin;
-    const minY = startY - margin;
-    const maxY = startY + chunkSize + margin;
-    const rivers = this.rivers.getRiversForBounds(minX, maxX, minY, maxY);
-
-    for (const river of rivers) {
-      if (river.points.length < 2) {
-        continue;
-      }
-      ctx.beginPath();
-      ctx.moveTo(river.points[0].x - startX, river.points[0].y - startY);
-      for (let i = 1; i < river.points.length; i += 1) {
-        ctx.lineTo(river.points[i].x - startX, river.points[i].y - startY);
-      }
-
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.strokeStyle = "rgba(14, 28, 46, 0.72)";
-      ctx.lineWidth = river.width + 1.8;
-      ctx.stroke();
-
-      ctx.strokeStyle = "rgba(124, 160, 188, 0.55)";
-      ctx.lineWidth = river.width;
-      ctx.stroke();
-    }
-  }
-
-  private drawForest(ctx: CanvasRenderingContext2D, startX: number, startY: number, chunkSize: number): void {
-    const cellSize = this.config.vegetation.treeGridSize;
-    const margin = this.config.vegetation.treeRenderMargin;
-    const minCellX = floorDiv(startX - margin, cellSize);
-    const maxCellX = floorDiv(startX + chunkSize + margin, cellSize);
-    const minCellY = floorDiv(startY - margin, cellSize);
-    const maxCellY = floorDiv(startY + chunkSize + margin, cellSize);
-    const denseThreshold = this.config.vegetation.forestDenseThreshold;
-    const minDensity = this.config.vegetation.forestMinDensity;
-
-    const densePoints: { x: number; y: number; radius: number; alpha: number }[] = [];
-    const edgePoints: { x: number; y: number; radius: number; alpha: number }[] = [];
-
-    for (let gy = minCellY; gy <= maxCellY; gy += 1) {
-      for (let gx = minCellX; gx <= maxCellX; gx += 1) {
-        const baseHash = hashCoords(this.treeSeed, gx, gy);
-        const jitterX = hashToUnit(mixUint32(baseHash ^ 0xa5b35721));
-        const jitterY = hashToUnit(mixUint32(baseHash ^ 0xf12c9d43));
-        const worldX = gx * cellSize + jitterX * cellSize;
-        const worldY = gy * cellSize + jitterY * cellSize;
-        const density = this.terrain.forestDensityAt(worldX, worldY);
-        if (density < minDensity) {
-          continue;
-        }
-
-        const chance = clamp((density - minDensity) / (1 - minDensity), 0, 1);
-        const roll = hashToUnit(mixUint32(baseHash ^ 0x6d2b79f5));
-        if (roll > chance * chance) {
-          continue;
-        }
-
-        const radiusScale = hashToUnit(mixUint32(baseHash ^ 0x9e3779b9));
-        const radius = lerp(this.config.vegetation.treeMinRadius, this.config.vegetation.treeMaxRadius, density) * (0.8 + radiusScale * 0.5);
-        const localX = worldX - startX;
-        const localY = worldY - startY;
-
-        if (density >= denseThreshold) {
-          densePoints.push({
-            x: localX,
-            y: localY,
-            radius,
-            alpha: clamp(0.32 + density * 0.34, 0.2, 0.7)
-          });
-        } else {
-          edgePoints.push({
-            x: localX,
-            y: localY,
-            radius: radius * 0.72,
-            alpha: clamp(0.42 + density * 0.3, 0.25, 0.7)
-          });
-        }
-      }
-    }
-
-    for (const tree of densePoints) {
-      ctx.fillStyle = `rgba(79, 109, 94, ${tree.alpha.toFixed(3)})`;
-      ctx.beginPath();
-      ctx.arc(tree.x, tree.y, tree.radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.lineWidth = 1;
-    for (const tree of edgePoints) {
-      ctx.fillStyle = `rgba(117, 161, 138, ${tree.alpha.toFixed(3)})`;
-      ctx.beginPath();
-      ctx.arc(tree.x, tree.y, tree.radius, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(37, 56, 47, 0.9)";
-      ctx.beginPath();
-      ctx.arc(tree.x, tree.y, tree.radius, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
-
-  private drawRoadsAndVillages(
-    ctx: CanvasRenderingContext2D,
-    startX: number,
-    startY: number,
-    features: SettlementFeatures
-  ): void {
-    if (!this.debug.showRoads && !this.debug.showVillages) {
-      return;
-    }
-
-    if (this.debug.showRoads) {
-      for (const road of features.roads) {
-        if (road.points.length < 2) {
-          continue;
-        }
-        ctx.beginPath();
-        ctx.moveTo(road.points[0].x - startX, road.points[0].y - startY);
-        for (let i = 1; i < road.points.length; i += 1) {
-          ctx.lineTo(road.points[i].x - startX, road.points[i].y - startY);
-        }
-
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.strokeStyle =
-          road.type === "major"
-            ? "rgba(72, 72, 58, 0.55)"
-            : road.type === "minor"
-              ? "rgba(78, 82, 70, 0.45)"
-              : "rgba(80, 87, 71, 0.42)";
-        ctx.lineWidth = road.width + (road.type === "local" ? 1.4 : 2.2);
-        ctx.stroke();
-
-        ctx.strokeStyle =
-          road.type === "major"
-            ? "rgba(215, 206, 166, 0.98)"
-            : road.type === "minor"
-              ? "rgba(199, 191, 154, 0.92)"
-              : "rgba(201, 198, 170, 0.9)";
-        ctx.lineWidth = road.width;
-        ctx.stroke();
-      }
-    }
-
-    if (this.debug.showVillages) {
-      this.drawVillageMarkers(ctx, startX, startY, features.villages);
-    }
-  }
-
-  private drawVillageMarkers(
-    ctx: CanvasRenderingContext2D,
-    startX: number,
-    startY: number,
-    villages: Village[]
-  ): void {
-    for (const village of villages) {
-      const x = village.x - startX;
-      const y = village.y - startY;
-      const radius = clamp(village.radius * 0.1, 4, 10);
-      const influence = clamp(village.radius, 36, 105);
-      ctx.fillStyle = "rgba(214, 224, 176, 0.12)";
-      ctx.beginPath();
-      ctx.arc(x, y, influence, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(100, 122, 76, 0.28)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      ctx.fillStyle = "rgba(247, 236, 201, 0.88)";
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(50, 60, 52, 0.82)";
-      ctx.lineWidth = 1.8;
-      ctx.stroke();
-    }
-  }
-
-  private drawParcels(ctx: CanvasRenderingContext2D, startX: number, startY: number, parcels: Parcel[]): void {
-    if (!this.debug.showParcels) {
-      return;
-    }
-
-    for (const parcel of parcels) {
-      const x = parcel.x - startX;
-      const y = parcel.y - startY;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(parcel.angle);
-      ctx.fillStyle = "rgba(211, 218, 167, 0.28)";
-      ctx.strokeStyle = "rgba(87, 104, 64, 0.46)";
-      ctx.lineWidth = 1;
-      ctx.fillRect(-parcel.width * 0.5, -parcel.depth * 0.5, parcel.width, parcel.depth);
-      ctx.strokeRect(-parcel.width * 0.5, -parcel.depth * 0.5, parcel.width, parcel.depth);
-      ctx.restore();
-    }
-  }
-
-  private drawHouses(ctx: CanvasRenderingContext2D, startX: number, startY: number, features: SettlementFeatures): void {
-    if (!this.debug.showHouses) {
-      return;
-    }
-
-    for (const house of features.houses) {
-      this.drawHouse(ctx, startX, startY, house);
-    }
-  }
-
-  private drawHouse(ctx: CanvasRenderingContext2D, startX: number, startY: number, house: House): void {
-    const x = house.x - startX;
-    const y = house.y - startY;
-    const roofPalette = [
-      { roof: "#907367", wall: "#c3b59d" },
-      { roof: "#6f7680", wall: "#b7b8b0" },
-      { roof: "#8f6654", wall: "#c2b19e" },
-      { roof: "#7d6f5f", wall: "#bbb09f" }
-    ];
-    const palette = roofPalette[house.roofStyle % roofPalette.length];
-
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(house.angle);
-
-    ctx.fillStyle = "rgba(25, 33, 38, 0.2)";
-    ctx.fillRect(-house.width * 0.55 + 1.5, -house.depth * 0.5 + 2.5, house.width, house.depth);
-
-    ctx.fillStyle = palette.wall;
-    ctx.strokeStyle = "rgba(49, 51, 47, 0.8)";
-    ctx.lineWidth = 1;
-    ctx.fillRect(-house.width * 0.5, -house.depth * 0.5, house.width, house.depth);
-    ctx.strokeRect(-house.width * 0.5, -house.depth * 0.5, house.width, house.depth);
-
-    ctx.fillStyle = palette.roof;
-    ctx.fillRect(-house.width * 0.6, -house.depth * 0.52, house.width * 1.2, house.depth * 0.58);
-    ctx.strokeRect(-house.width * 0.6, -house.depth * 0.52, house.width * 1.2, house.depth * 0.58);
-
-    ctx.strokeStyle = "rgba(45, 38, 35, 0.42)";
-    ctx.beginPath();
-    ctx.moveTo(-house.width * 0.55, -house.depth * 0.4);
-    ctx.lineTo(house.width * 0.55, -house.depth * 0.4);
-    ctx.stroke();
-
-    ctx.restore();
   }
 }

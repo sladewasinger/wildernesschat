@@ -110,7 +110,7 @@ export class RiverSystem {
 
       const path = this.traceRiver(bestCandidate.x, bestCandidate.y, createRng(hashCoords(seed, i, 91)));
       if (path.length > 10) {
-        const width = 1.8 + rng.next() * 2.2;
+        const width = this.config.roads.majorWidth * (2.2 + rng.next() * 0.8);
         paths.push({ points: path, width });
       }
     }
@@ -128,6 +128,7 @@ export class RiverSystem {
     let previousDirectionX = Math.cos(rng.next() * Math.PI * 2);
     let previousDirectionY = Math.sin(rng.next() * Math.PI * 2);
     let reachedWater = false;
+    let previousElevation = this.terrain.sample(x, y).elevation;
 
     for (let step = 0; step < maxSteps; step += 1) {
       const gradient = this.terrain.gradientAt(x, y, 5);
@@ -158,6 +159,10 @@ export class RiverSystem {
       y += directionY * stepLength;
 
       const sample = this.terrain.sample(x, y);
+      if (sample.elevation > previousElevation + 0.012) {
+        break;
+      }
+      previousElevation = sample.elevation;
       path.push({ x, y });
 
       if (sample.waterDepth > 0.002 && step > 8) {
@@ -170,20 +175,26 @@ export class RiverSystem {
         const dx = x - back.x;
         const dy = y - back.y;
         if (dx * dx + dy * dy < stepLength * stepLength * 2.5) {
-          break;
+          return [];
+        }
+      }
+
+      if (path.length > 10) {
+        for (let i = 0; i < path.length - 6; i += 1) {
+          const dx = x - path[i].x;
+          const dy = y - path[i].y;
+          if (dx * dx + dy * dy < stepLength * stepLength * 0.65) {
+            return [];
+          }
         }
       }
     }
 
-    if (!reachedWater && path.length > 2) {
-      const startElevation = this.terrain.sample(path[0].x, path[0].y).elevation;
-      const endElevation = this.terrain.sample(path[path.length - 1].x, path[path.length - 1].y).elevation;
-      if (startElevation - endElevation < 0.06) {
-        return [];
-      }
+    if (!reachedWater) {
+      return [];
     }
 
-    return path;
+    return path.reverse();
   }
 
   clear(): void {

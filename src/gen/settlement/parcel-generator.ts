@@ -2,6 +2,7 @@ import { lerp } from "../../util/math";
 import { WorldConfig } from "../config";
 import { hashCoords, hashString, hashToUnit } from "../hash";
 import { TerrainSampler } from "../terrain";
+import { parcelIdForRoadPosition } from "./stable-ids";
 import { Parcel, Road, Village } from "./types";
 
 export class ParcelGenerator {
@@ -93,7 +94,7 @@ export class ParcelGenerator {
             }
 
             parcels.push({
-              id: `p-${road.id}-${i}-${step}-${side}`,
+              id: parcelIdForRoadPosition(road.id, i, step, side),
               villageId: village.id,
               roadId: road.id,
               roadType: road.type,
@@ -149,4 +150,3 @@ export class ParcelGenerator {
     return end ?? start ?? null;
   }
 }
-

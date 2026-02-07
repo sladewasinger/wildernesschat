@@ -68,6 +68,13 @@ export type ChunkConfig = {
   pixelSize: number;
   maxCachedChunks: number;
   sampleStep: number;
+  featureMargin: number;
+  superchunkSpanChunks: number;
+  maxCachedSuperchunks: number;
+  generationBudgetMs: number;
+  maxChunkBuildsPerFrame: number;
+  enableSeamValidation: boolean;
+  seamColorTolerance: number;
 };
 
 export type DebugLayerConfig = {
@@ -119,12 +126,12 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
       riverMaxSteps: 110
     },
     vegetation: {
-      treeGridSize: 14,
+      treeGridSize: 18,
       treeRenderMargin: 24,
-      forestMinDensity: 0.32,
-      forestDenseThreshold: 0.62,
-      treeMinRadius: 2.5,
-      treeMaxRadius: 7.4
+      forestMinDensity: 0.3,
+      forestDenseThreshold: 0.58,
+      treeMinRadius: 3.2,
+      treeMaxRadius: 8.2
     },
     settlement: {
       cellSize: 360,
@@ -139,16 +146,16 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
       regionSize: 1800,
       nearestNeighbors: 3,
       maxConnectionDistance: 900,
-      loopChance: 0.22,
-      majorWidth: 8.8,
-      minorWidth: 5.2,
-      localWidth: 3.7,
+      loopChance: 0.12,
+      majorWidth: 3.2,
+      minorWidth: 2.2,
+      localWidth: 1.5,
       routeStep: 80,
-      maxCurvatureOffset: 70
+      maxCurvatureOffset: 56
     },
     houses: {
-      spacing: 34,
-      sideChance: 0.62,
+      spacing: 24,
+      sideChance: 0.79,
       minSetback: 9,
       maxSetback: 16,
       minWidth: 10,
@@ -160,7 +167,14 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
     chunk: {
       pixelSize: 320,
       maxCachedChunks: 196,
-      sampleStep: 2
+      sampleStep: 2,
+      featureMargin: 140,
+      superchunkSpanChunks: 3,
+      maxCachedSuperchunks: 80,
+      generationBudgetMs: 2.8,
+      maxChunkBuildsPerFrame: 1,
+      enableSeamValidation: false,
+      seamColorTolerance: 22
     },
     debug: {
       showContours: false,
@@ -169,7 +183,7 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
       showMoisture: false,
       showForestMask: false,
       showRoads: true,
-      showVillages: true,
+      showVillages: false,
       showParcels: false,
       showHouses: true
     }

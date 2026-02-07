@@ -112,7 +112,7 @@ export class SettlementSystem {
       coreMaxY + margin
     );
     const regionalRoads = this.roadGenerator.buildRegionalRoadNetwork(villages);
-    const localRoads = this.roadGenerator.buildLocalRoadNetwork(villages);
+    const localRoads = this.roadGenerator.buildLocalRoadNetwork(villages, regionalRoads);
     const roads = [...regionalRoads, ...localRoads];
     const parcels = this.parcelGenerator.generateParcels(roads, villages);
     const houses = this.houseGenerator.generateHouses(parcels);
@@ -154,4 +154,3 @@ export class SettlementSystem {
     }
   }
 }
-

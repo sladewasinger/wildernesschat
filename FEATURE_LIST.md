@@ -9,6 +9,7 @@ This document tracks the pivot from the current WFC prototype to an organic, non
 - Organic (angled/curved) roads and building placement.
 - Large water bodies, highways, villages, side streets, forests, and fields.
 - Multiplayer-friendly: same seed and config must produce the same map.
+- Crisp cartographic style with bold outlines, readable symbols, and minimal sketch noise.
 
 ## Recommended Algorithm Stack
 
@@ -122,27 +123,52 @@ All generation modules should accept config and RNG explicitly (no hidden global
 
 ### Phase 4: Local Streets + Buildings
 
-- [x] Village-local street growth (first-pass spoke/curved local roads).
+- [x] Village-local street growth (first-pass organic streets).
+- [x] Village-local street growth refinement (axis-aligned village street bands + connector to regional roads).
 - [x] Parcel frontage extraction (roadside parcel lots + debug view).
 - [x] House footprint placement and orientation (parcel-based and road-aligned).
 
 ### Phase 5: Forests + Fields
 
-- [ ] Forest clustering and tree instances.
-- [ ] Agricultural patch generation near outskirts.
-- [ ] Land-use blending rules.
+- [x] Forest clustering and tree instances.
+- [x] Agricultural patch generation near outskirts (first pass).
+- [x] Land-use blending rules (first pass: forest/field pressure from roads + village influence bands).
+- [x] Blend coefficient retune for stronger field readability and cleaner village clearings.
 
 ### Phase 6: Infinite Streaming and Performance
 
-- [ ] Superchunk cache with eviction.
-- [ ] Chunk seam validation.
-- [ ] Frame budget + generation throttling.
+- [x] Superchunk cache with eviction.
+- [x] Chunk seam validation (implemented; disabled by default for runtime performance).
+- [x] Frame budget + generation throttling.
 
 ### Phase 7: Multiplayer Readiness
 
-- [ ] Canonical seed/config handshake format.
-- [ ] Determinism tests across environments.
-- [ ] Stable IDs for roads/buildings/villages.
+- [x] Canonical seed/config handshake format.
+- [x] Determinism tests across environments.
+- [x] Stable IDs for roads/buildings/villages.
+
+### Phase 8: Visual Style Polish
+
+- [x] River and road outline pass with stronger line weight hierarchy.
+- [x] Village marker simplification (small cartographic marker instead of large influence circle).
+- [x] Field visibility pass (opacity, linework, and palette improvements).
+- [x] Tree symbol pass (stylized canopies + trunk + shadow; no plain circles).
+- [ ] Optional sprite/icon atlas integration for premium tree/building silhouettes.
+
+### Phase 9: Road/Water Coherence
+
+- [x] Rivers widened relative to roads (target >= 2x major road width).
+- [x] River tracing constraints to reduce self-looping.
+- [x] Road render culling near river channels to avoid obvious overlap artifacts.
+- [ ] Bridge generation for intentional road-water crossings.
+- [ ] Promote rivers and lakes into a unified rendered water polygon layer.
+
+### Phase 10: Runtime Performance Hardening
+
+- [x] Conservative default generation budget and per-frame chunk build limits.
+- [x] Seam validator default-off to avoid chunk-build stalls in normal play.
+- [ ] Profiling pass for chunk build hotspots (terrain sampling vs settlement synthesis vs overlay draw).
+- [ ] Background prefetch for movement direction to hide generation blips while traveling.
 
 ## Progress Checklist
 
@@ -152,16 +178,22 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Village prior model implemented.
 - [x] Regional highway generator implemented.
 - [x] Local village street generator implemented (first pass).
+- [x] Local village street refinement implemented (main-road-oriented and reduced overlap).
 - [x] Curved-road-aligned building placement implemented.
 - [x] Parcel generator implemented (frontage-oriented lots).
-- [ ] Forest and field generation implemented.
+- [x] Forest and field generation implemented (first pass).
+- [x] Visual style pass started (bold outlines, stronger fields, stylized trees).
 - [x] Full chunk streaming for new pipeline implemented.
-- [ ] Multiplayer determinism test suite implemented.
+- [x] Multiplayer determinism test suite implemented.
+- [ ] Bridge system implemented.
+- [ ] Unified water polygon renderer implemented.
+- [ ] Runtime hitching eliminated during chunk travel.
 
 ## Open Design Decisions
 
-- [ ] Visual style target: hand-drawn look vs crisp vector/cartographic.
+- [x] Visual style target: crisp cartographic with bold outlines and readable symbols (minimal sketch noise).
 - [ ] World scale: meters-per-pixel and village average radius.
 - [ ] Water prevalence target (rare lakes vs many lakes/rivers).
 - [ ] Settlement frequency target (distance between villages).
-- [ ] Whether to support bridges/tunnels in first version.
+- [ ] Whether first ship includes generated bridges or keeps strict no-crossing roads.
+- [ ] Whether trees/buildings move to sprite assets or stay fully procedural.
