@@ -7,7 +7,8 @@ export const V2_VIEW_CONFIG = {
   maxZoom: 2.8,
   keyZoomStep: 1.12,
   wheelZoomStep: 1.1,
-  terrainWorldStep: 4
+  terrainWorldStep: 4,
+  terrainMinScreenStepPx: 5
 } as const;
 
 export const V2_SETTLEMENT_CONFIG = {
@@ -123,8 +124,9 @@ export const V2_SETTLEMENT_CONFIG = {
       candidateTurnTries: 3,
       candidateTurnStepRad: 0.24,
       mergeCacheQuantize: 96,
-      graphEndpointSnapRadius: 16,
-      graphNodeSnapRadius: 10,
+      graphEndpointSnapRadius: 250,
+      graphNodeSnapRadius: 125,
+      graphJunctionMergeLength: 200,
       graphMinEdgeLength: 6,
       graphStubPruneLength: 72,
       maxSlope: 0.11

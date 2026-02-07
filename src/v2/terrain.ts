@@ -18,6 +18,8 @@ export class V2TerrainSampler {
   private readonly warpSeed: number;
   private readonly macroSeed: number;
   private readonly localSeed: number;
+  private readonly renderElevationCache = new Map<number, Map<number, number>>();
+  private renderElevationCount = 0;
 
   constructor(seed: string) {
     this.warpSeed = hashString(`${seed}:v2:warp`);
@@ -43,5 +45,32 @@ export class V2TerrainSampler {
     const d = this.elevationAt(x, y - step);
     const u = this.elevationAt(x, y + step);
     return Math.hypot(r - l, u - d);
+  }
+
+  elevationAtRender(x: number, y: number): number {
+    const qx = Math.round(x * 4);
+    const qy = Math.round(y * 4);
+    const row = this.renderElevationCache.get(qy);
+    if (row) {
+      const cached = row.get(qx);
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
+
+    const value = this.elevationAt(x, y);
+    if (row) {
+      row.set(qx, value);
+    } else {
+      this.renderElevationCache.set(qy, new Map<number, number>([[qx, value]]));
+    }
+
+    this.renderElevationCount += 1;
+    if (this.renderElevationCount > 240000) {
+      this.renderElevationCache.clear();
+      this.renderElevationCount = 0;
+    }
+
+    return value;
   }
 }

@@ -357,7 +357,8 @@ const buildUnifiedContinuityRoads = (roads: RoadSegment[]): RoadSegment[] => {
     return [];
   }
 
-  const graph = buildWeldedGraph(pieces, continuity.graphNodeSnapRadius);
+  let graph = buildWeldedGraph(pieces, continuity.graphNodeSnapRadius);
+  graph = collapseShortJunctionLinks(graph.nodes, graph.edges, continuity.graphJunctionMergeLength);
   pruneShortLeafEdges(graph.nodes.length, graph.edges, continuity.graphStubPruneLength);
   const chains = extractGraphChains(graph.nodes, graph.edges);
 
@@ -574,6 +575,124 @@ const buildWeldedGraph = (pieces: EdgePiece[], nodeSnapRadius: number): { nodes:
   }
 
   return { nodes, edges };
+};
+
+const collapseShortJunctionLinks = (
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  maxLinkLength: number
+): { nodes: GraphNode[]; edges: GraphEdge[] } => {
+  if (maxLinkLength <= 0) {
+    return { nodes, edges };
+  }
+
+  const degree = new Array<number>(nodes.length).fill(0);
+  for (const edge of edges) {
+    if (!edge.active) {
+      continue;
+    }
+    degree[edge.a] += 1;
+    degree[edge.b] += 1;
+  }
+
+  const parent = new Array<number>(nodes.length);
+  for (let i = 0; i < nodes.length; i += 1) {
+    parent[i] = i;
+  }
+
+  const find = (x: number): number => {
+    let root = x;
+    while (parent[root] !== root) {
+      root = parent[root];
+    }
+    let cur = x;
+    while (parent[cur] !== cur) {
+      const next = parent[cur];
+      parent[cur] = root;
+      cur = next;
+    }
+    return root;
+  };
+
+  const unite = (a: number, b: number): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra === rb) {
+      return;
+    }
+    parent[rb] = ra;
+  };
+
+  let mergedAny = false;
+  for (const edge of edges) {
+    if (!edge.active || edge.length > maxLinkLength) {
+      continue;
+    }
+    if (degree[edge.a] >= 3 || degree[edge.b] >= 3) {
+      unite(edge.a, edge.b);
+      mergedAny = true;
+    }
+  }
+
+  if (!mergedAny) {
+    return { nodes, edges };
+  }
+
+  const rootStats = new Map<number, { sumX: number; sumY: number; count: number }>();
+  for (let i = 0; i < nodes.length; i += 1) {
+    const root = find(i);
+    const stats = rootStats.get(root);
+    if (stats) {
+      stats.sumX += nodes[i].x;
+      stats.sumY += nodes[i].y;
+      stats.count += 1;
+    } else {
+      rootStats.set(root, { sumX: nodes[i].x, sumY: nodes[i].y, count: 1 });
+    }
+  }
+
+  const rootToNodeIndex = new Map<number, number>();
+  const mergedNodes: GraphNode[] = [];
+  for (const [root, stats] of rootStats) {
+    rootToNodeIndex.set(root, mergedNodes.length);
+    mergedNodes.push({
+      x: stats.sumX / stats.count,
+      y: stats.sumY / stats.count
+    });
+  }
+
+  const edgeSeen = new Set<string>();
+  const mergedEdges: GraphEdge[] = [];
+  for (const edge of edges) {
+    if (!edge.active) {
+      continue;
+    }
+    const aRoot = find(edge.a);
+    const bRoot = find(edge.b);
+    const a = rootToNodeIndex.get(aRoot);
+    const b = rootToNodeIndex.get(bRoot);
+    if (a === undefined || b === undefined || a === b) {
+      continue;
+    }
+    const low = a < b ? a : b;
+    const high = a < b ? b : a;
+    const key = `${low}|${high}`;
+    if (edgeSeen.has(key)) {
+      continue;
+    }
+    edgeSeen.add(key);
+    mergedEdges.push({
+      a: low,
+      b: high,
+      length: Math.hypot(mergedNodes[high].x - mergedNodes[low].x, mergedNodes[high].y - mergedNodes[low].y),
+      active: true
+    });
+  }
+
+  return {
+    nodes: mergedNodes,
+    edges: mergedEdges
+  };
 };
 
 const pruneShortLeafEdges = (nodeCount: number, edges: GraphEdge[], stubLength: number): void => {

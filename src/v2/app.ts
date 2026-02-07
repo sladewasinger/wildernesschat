@@ -33,6 +33,7 @@ export class V2App {
   private lastTime = 0;
   private stage: number = 2;
   private zoom: number = V2_VIEW_CONFIG.defaultZoom;
+  private currentTerrainWorldStep: number = V2_VIEW_CONFIG.terrainWorldStep;
 
   constructor(canvas: HTMLCanvasElement, hud: HTMLElement, seed: string, initialStage: number, initialZoom: number) {
     this.canvas = canvas;
@@ -207,7 +208,7 @@ export class V2App {
       `Player px: ${this.playerX.toFixed(1)}, ${this.playerY.toFixed(1)}`,
       `Chunk-ish: ${floorDiv(this.playerX, 320)}, ${floorDiv(this.playerY, 320)}`,
       `Terrain: elev=${terrain.toFixed(3)} slope=${slope.toFixed(3)}`,
-      `Contour grid: ${V2_VIEW_CONFIG.terrainWorldStep} world units`,
+      `Contour grid: ${this.currentTerrainWorldStep.toFixed(1)} world units`,
       `Visible sites: ${visibleSites.length}`,
       `Visible metrics: branches=${visibleBranchCount} shortcuts=${visibleShortcutCount} connectors=${visibleConnectorCount}`,
       ...(perSiteMetrics.length > 0 ? perSiteMetrics : ["Per-site metrics: none"])
@@ -215,7 +216,11 @@ export class V2App {
   }
 
   private drawTerrain(ctx: CanvasRenderingContext2D, width: number, height: number, viewMinX: number, viewMinY: number): void {
-    const worldStep = V2_VIEW_CONFIG.terrainWorldStep;
+    const baseStep = V2_VIEW_CONFIG.terrainWorldStep;
+    const minScreenPx = V2_VIEW_CONFIG.terrainMinScreenStepPx;
+    const stepMultiplier = Math.max(1, Math.ceil((minScreenPx / this.zoom) / baseStep));
+    const worldStep = baseStep * stepMultiplier;
+    this.currentTerrainWorldStep = worldStep;
     const viewMaxX = viewMinX + width / this.zoom;
     const viewMaxY = viewMinY + height / this.zoom;
     const startWX = Math.floor(viewMinX / worldStep) * worldStep;
@@ -223,7 +228,7 @@ export class V2App {
 
     for (let wy = startWY; wy <= viewMaxY + worldStep; wy += worldStep) {
       for (let wx = startWX; wx <= viewMaxX + worldStep; wx += worldStep) {
-        const elevation = this.terrain.elevationAt(wx, wy);
+        const elevation = this.terrain.elevationAtRender(wx, wy);
         const contour = Math.abs((elevation * 22) % 1 - 0.5);
 
         let r = lerp(177, 124, elevation);
