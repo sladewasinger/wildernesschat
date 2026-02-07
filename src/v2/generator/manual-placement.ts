@@ -180,10 +180,30 @@ export const createManualRoadToAttachment = (
   const toAttachY = attachment.point.y - front.y;
   const toAttachLen = Math.hypot(toAttachX, toAttachY);
   const alignment = toAttachLen <= 1e-6 ? 1 : (toAttachX * forwardX + toAttachY * forwardY) / toAttachLen;
-  const needsAwayCurve = alignment < V2_SETTLEMENT_CONFIG.manualPlacement.sideBackAlignmentThreshold;
+  const roadTan = normalizeDirection(attachment.tangentX, attachment.tangentY);
+  if (!roadTan) {
+    return null;
+  }
+  const roadNormalA = { x: -roadTan.y, y: roadTan.x };
+  const roadNormalB = { x: roadTan.y, y: -roadTan.x };
+  const forwardError = Math.acos(clamp(alignment, -1, 1));
+  const straightAttachAngle = Math.PI * 0.2; // ~36deg: house already faces the target road
+  const attachDir = toAttachLen <= 1e-6 ? null : normalizeDirection(toAttachX, toAttachY);
+  const isNearPerpendicularToRoad = !attachDir ? false : Math.abs(attachDir.x * roadTan.x + attachDir.y * roadTan.y) <= 0.2;
+  if (toAttachLen > 1e-6 && forwardError <= straightAttachAngle && isNearPerpendicularToRoad) {
+    const points = dedupeRoadPoints([front, attachment.point]);
+    if (points.length < 2) {
+      return null;
+    }
+    return {
+      id,
+      className: "trunk",
+      width: V2_SETTLEMENT_CONFIG.roads.width,
+      points
+    };
+  }
+
   const minCurveRadius = V2_SETTLEMENT_CONFIG.manualPlacement.attachmentBendRadius;
-  const directDistance = Math.hypot(attachment.point.x - front.x, attachment.point.y - front.y);
-  const directThreshold = Math.max(12, house.depth * 1.25 + V2_SETTLEMENT_CONFIG.roads.width * 1.2);
   const stub = V2_SETTLEMENT_CONFIG.manualPlacement.drivewayStubLength;
   const attachmentStraightLead = Math.max(stub, Math.min(46, minCurveRadius * 0.42));
   const startPoint: Point = {
@@ -196,10 +216,15 @@ export const createManualRoadToAttachment = (
     tangentY: forwardY,
     houseFrontPoint: front
   };
+  const towardStart = normalizeDirection(startPoint.x - attachment.point.x, startPoint.y - attachment.point.y);
+  const endJoinTangent =
+    towardStart && roadNormalA.x * towardStart.x + roadNormalA.y * towardStart.y >= roadNormalB.x * towardStart.x + roadNormalB.y * towardStart.y
+      ? roadNormalA
+      : roadNormalB;
   const end: SideNode = {
     point: attachment.point,
-    tangentX: attachment.tangentX,
-    tangentY: attachment.tangentY
+    tangentX: endJoinTangent.x,
+    tangentY: endJoinTangent.y
   };
   const fixedRadiusRoad = createFixedRadiusConnectorRoad(
     id,
