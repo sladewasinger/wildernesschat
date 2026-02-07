@@ -35,6 +35,16 @@ export const V2_SETTLEMENT_CONFIG = {
     houseSetbackMax: 38,
     houseRoadClearance: 12
   },
+  manualPlacement: {
+    attachmentBendRadius: 500,
+    seedRoadBendRadius: 28,
+    drivewayStubLength: 9,
+    sideBackAlignmentThreshold: 0.2,
+    awayCurveStartHandleScale: 1,
+    awayCurveEndHandleSpanScale: 0.38,
+    awayCurveEndHandleMin: 16,
+    awayCurveEndHandleMax: 46
+  },
   stage2: {
     trunkGrowth: {
       slotCount: 14,

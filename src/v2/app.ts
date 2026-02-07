@@ -238,7 +238,7 @@ export class V2App {
       const preview = this.currentManualPreview();
       this.drawRoads(this.manualRoads, viewMinX, viewMinY);
       if (preview.road) {
-        this.drawRoads([preview.road], viewMinX, viewMinY, 0.48);
+        this.drawRoads([preview.road], viewMinX, viewMinY, 0.48, true);
       }
       if (preview.secondaryRoad) {
         this.drawRoads([preview.secondaryRoad], viewMinX, viewMinY, 0.38);
@@ -671,7 +671,7 @@ export class V2App {
     }
   }
 
-  private drawRoads(roads: RoadSegment[], viewMinX: number, viewMinY: number, alpha = 1): void {
+  private drawRoads(roads: RoadSegment[], viewMinX: number, viewMinY: number, alpha = 1, showPreviewHandles = false): void {
     const path = new Path2D();
     for (const road of roads) {
       if (road.points.length < 2) {
@@ -700,6 +700,45 @@ export class V2App {
     ctx.strokeStyle = V2_RENDER_CONFIG.roadFillColor;
     ctx.lineWidth = V2_SETTLEMENT_CONFIG.roads.width * this.zoom;
     ctx.stroke(path);
+
+    if (this.manualPlacementMode && showPreviewHandles) {
+      ctx.strokeStyle = "rgba(120, 200, 255, 0.9)";
+      ctx.lineWidth = Math.max(1, 1.35 * this.zoom);
+      ctx.setLineDash([6, 4]);
+      for (const road of roads) {
+        const beziers = road.bezierDebug;
+        if (!beziers || beziers.length === 0) {
+          continue;
+        }
+        for (const bezier of beziers) {
+          const p0x = (bezier.p0.x - viewMinX) * this.zoom;
+          const p0y = (bezier.p0.y - viewMinY) * this.zoom;
+          const p1x = (bezier.p1.x - viewMinX) * this.zoom;
+          const p1y = (bezier.p1.y - viewMinY) * this.zoom;
+          const p2x = (bezier.p2.x - viewMinX) * this.zoom;
+          const p2y = (bezier.p2.y - viewMinY) * this.zoom;
+          const p3x = (bezier.p3.x - viewMinX) * this.zoom;
+          const p3y = (bezier.p3.y - viewMinY) * this.zoom;
+
+          ctx.beginPath();
+          ctx.moveTo(p0x, p0y);
+          ctx.lineTo(p1x, p1y);
+          ctx.moveTo(p3x, p3y);
+          ctx.lineTo(p2x, p2y);
+          ctx.stroke();
+
+          const handleRadius = Math.max(2.4, 3 * this.zoom);
+          ctx.beginPath();
+          ctx.arc(p1x, p1y, handleRadius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(p2x, p2y, handleRadius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+    }
+
     ctx.restore();
   }
 

@@ -3,6 +3,13 @@ export type Point = {
   y: number;
 };
 
+export type CubicBezierDebug = {
+  p0: Point;
+  p1: Point;
+  p2: Point;
+  p3: Point;
+};
+
 export type RoadClass = "trunk" | "branch" | "drive" | "shortcut";
 
 export type RoadSegment = {
@@ -10,6 +17,7 @@ export type RoadSegment = {
   className: RoadClass;
   width: number;
   points: Point[];
+  bezierDebug?: CubicBezierDebug[] | null;
 };
 
 export type House = {

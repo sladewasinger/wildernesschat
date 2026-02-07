@@ -16,6 +16,7 @@ type RoadBuildOptions = {
 
 type DrivewayNodeOptions = {
   preferShort?: boolean;
+  minOutwardLength?: number;
 };
 
 export type RoadAttachment = {
@@ -153,6 +154,16 @@ export const createManualRoadBetweenHouses = (
     tangentX: endTangent.x,
     tangentY: endTangent.y
   };
+  const fixedRadiusRoad = createFixedRadiusConnectorRoad(
+    id,
+    start,
+    end,
+    V2_SETTLEMENT_CONFIG.manualPlacement.seedRoadBendRadius,
+    1
+  );
+  if (fixedRadiusRoad) {
+    return fixedRadiusRoad;
+  }
   return createManualRoadBetweenNodes(id, start, end, terrain);
 };
 
@@ -163,42 +174,48 @@ export const createManualRoadToAttachment = (
   terrain: V2TerrainSampler
 ): RoadSegment | null => {
   const front = houseFrontPoint(house);
+  const forwardX = Math.cos(house.angle);
+  const forwardY = Math.sin(house.angle);
+  const toAttachX = attachment.point.x - front.x;
+  const toAttachY = attachment.point.y - front.y;
+  const toAttachLen = Math.hypot(toAttachX, toAttachY);
+  const alignment = toAttachLen <= 1e-6 ? 1 : (toAttachX * forwardX + toAttachY * forwardY) / toAttachLen;
+  const needsAwayCurve = alignment < V2_SETTLEMENT_CONFIG.manualPlacement.sideBackAlignmentThreshold;
+  const minCurveRadius = V2_SETTLEMENT_CONFIG.manualPlacement.attachmentBendRadius;
   const directDistance = Math.hypot(attachment.point.x - front.x, attachment.point.y - front.y);
   const directThreshold = Math.max(12, house.depth * 1.25 + V2_SETTLEMENT_CONFIG.roads.width * 1.2);
-  if (directDistance <= directThreshold) {
-    const points = dedupeRoadPoints([front, attachment.point]);
-    if (points.length >= 2) {
-      return {
-        id,
-        className: "trunk",
-        width: V2_SETTLEMENT_CONFIG.roads.width,
-        points
-      };
-    }
-    return null;
-  }
-
-  const start = drivewayEndNode(house, attachment.point);
-  const towardAttach = normalizeDirection(attachment.point.x - start.point.x, attachment.point.y - start.point.y);
-  const startTangent = towardAttach
-    ? blendDirections(start.tangentX, start.tangentY, towardAttach.x, towardAttach.y, 0.68)
-    : { x: start.tangentX, y: start.tangentY };
+  const stub = V2_SETTLEMENT_CONFIG.manualPlacement.drivewayStubLength;
+  const attachmentStraightLead = Math.max(stub, Math.min(46, minCurveRadius * 0.42));
+  const startPoint: Point = {
+    x: front.x + forwardX * attachmentStraightLead,
+    y: front.y + forwardY * attachmentStraightLead
+  };
+  const startTangent: SideNode = {
+    point: startPoint,
+    tangentX: forwardX,
+    tangentY: forwardY,
+    houseFrontPoint: front
+  };
   const end: SideNode = {
     point: attachment.point,
     tangentX: attachment.tangentX,
     tangentY: attachment.tangentY
   };
-  return createManualRoadBetweenNodes(
+  const fixedRadiusRoad = createFixedRadiusConnectorRoad(
     id,
-    {
-      ...start,
-      tangentX: startTangent.x,
-      tangentY: startTangent.y
-    },
+    startTangent,
     end,
-    terrain,
-    { allowShortSpan: true }
+    minCurveRadius,
+    0,
+    "perpendicular"
   );
+  if (!fixedRadiusRoad) {
+    return null;
+  }
+  if (!roadClearsSourceHouse(fixedRadiusRoad, house)) {
+    return null;
+  }
+  return fixedRadiusRoad;
 };
 
 export const findBridgeAttachmentForHouse = (
@@ -422,6 +439,134 @@ const buildTangentBezierCurve = (start: SideNode, end: SideNode, span: number): 
   return dedupeRoadPoints(points);
 };
 
+const createFixedRadiusConnectorRoad = (
+  id: string,
+  start: SideNode,
+  end: SideNode,
+  bendRadius: number,
+  smoothPasses: number,
+  startHandleMode: "tangent" | "perpendicular" = "tangent"
+): RoadSegment | null => {
+  const p0 = start.point;
+  const p3 = end.point;
+  const span = Math.hypot(p3.x - p0.x, p3.y - p0.y);
+  if (span <= 1e-6) {
+    return null;
+  }
+
+  const sTan = normalizeDirection(start.tangentX, start.tangentY);
+  const eTan = normalizeDirection(end.tangentX, end.tangentY);
+  if (!sTan || !eTan) {
+    return null;
+  }
+
+  const dot = clamp(sTan.x * eTan.x + sTan.y * eTan.y, -1, 1);
+  const theta = Math.acos(dot); // angle between tangents
+  if (theta < 1e-3) {
+    const linePoints = dedupeRoadPoints([start.houseFrontPoint ?? p0, p0, p3, end.houseFrontPoint ?? p3]);
+    return linePoints.length >= 2
+      ? { id, className: "trunk", width: V2_SETTLEMENT_CONFIG.roads.width, points: linePoints }
+      : null;
+  }
+
+  const toEnd = normalizeDirection(p3.x - p0.x, p3.y - p0.y);
+  const startNormalA = { x: -sTan.y, y: sTan.x };
+  const startNormalB = { x: sTan.y, y: -sTan.x };
+  const turnDir =
+    startHandleMode === "perpendicular" && toEnd
+      ? (() => {
+          const dotA = startNormalA.x * toEnd.x + startNormalA.y * toEnd.y;
+          const dotB = startNormalB.x * toEnd.x + startNormalB.y * toEnd.y;
+          return dotA >= dotB ? startNormalA : startNormalB;
+        })()
+      : startNormalA;
+
+  const startAnchor = start.houseFrontPoint ?? start.point;
+  const endAnchor = end.houseFrontPoint ?? end.point;
+  const sampled: Point[] = [];
+  const beziers: { p0: Point; p1: Point; p2: Point; p3: Point }[] = [];
+
+  if (startHandleMode === "perpendicular") {
+    // Straight driveway is already startAnchor -> p0. Add an explicit quarter-turn fillet from p0 before main road.
+    const filletRadius = clamp(Math.min(bendRadius, span * 0.32), 8, 36);
+    const arcK = 0.5522847498;
+    const filletHandle = filletRadius * arcK;
+    const f0 = p0;
+    const f3 = {
+      x: f0.x + sTan.x * filletRadius + turnDir.x * filletRadius,
+      y: f0.y + sTan.y * filletRadius + turnDir.y * filletRadius
+    };
+    const f1 = {
+      x: f0.x + sTan.x * filletHandle,
+      y: f0.y + sTan.y * filletHandle
+    };
+    const f2 = {
+      x: f3.x - turnDir.x * filletHandle,
+      y: f3.y - turnDir.y * filletHandle
+    };
+    const filletSpan = Math.hypot(f3.x - f0.x, f3.y - f0.y);
+    const filletSamples = clamp(Math.round(filletSpan / 1.15), 6, 18);
+    for (let i = 0; i <= filletSamples; i += 1) {
+      sampled.push(sampleCubicBezier(f0, f1, f2, f3, i / filletSamples));
+    }
+    beziers.push({ p0: f0, p1: f1, p2: f2, p3: f3 });
+
+    const m0 = f3;
+    const mainSpan = Math.hypot(p3.x - m0.x, p3.y - m0.y);
+    if (mainSpan > 1e-4) {
+      const mainDot = clamp(turnDir.x * eTan.x + turnDir.y * eTan.y, -1, 1);
+      const mainTheta = Math.acos(mainDot);
+      const mainIdeal = bendRadius * (4 / 3) * Math.tan(mainTheta / 4);
+      const mainHandleLen = clamp(mainIdeal, 6, Math.max(8, mainSpan * 0.48));
+      const m1 = {
+        x: m0.x + turnDir.x * mainHandleLen,
+        y: m0.y + turnDir.y * mainHandleLen
+      };
+      const m3 = p3;
+      const m2 = {
+        x: m3.x + eTan.x * mainHandleLen,
+        y: m3.y + eTan.y * mainHandleLen
+      };
+      const mainSamples = clamp(Math.round(mainSpan / 2.1), 10, 52);
+      for (let i = 0; i <= mainSamples; i += 1) {
+        sampled.push(sampleCubicBezier(m0, m1, m2, m3, i / mainSamples));
+      }
+      beziers.push({ p0: m0, p1: m1, p2: m2, p3: m3 });
+    }
+  } else {
+    // Circular arc approximation with cubic Bezier: handle = R * 4/3 * tan(theta/4)
+    const idealHandle = bendRadius * (4 / 3) * Math.tan(theta / 4);
+    const maxHandle = Math.max(8, span * 0.48);
+    const handleLen = clamp(idealHandle, 6, maxHandle);
+    const p1 = {
+      x: p0.x + sTan.x * handleLen,
+      y: p0.y + sTan.y * handleLen
+    };
+    const p2 = {
+      x: p3.x + eTan.x * handleLen,
+      y: p3.y + eTan.y * handleLen
+    };
+    const sampleCount = clamp(Math.round(span / 2.1), 14, 54);
+    for (let i = 0; i <= sampleCount; i += 1) {
+      sampled.push(sampleCubicBezier(p0, p1, p2, p3, i / sampleCount));
+    }
+    beziers.push({ p0, p1, p2, p3 });
+  }
+
+  const basePoints = dedupeRoadPoints([startAnchor, ...sampled, endAnchor]);
+  const smoothed = smoothPasses <= 0 ? basePoints : dedupeRoadPoints(chaikinSmooth(basePoints, smoothPasses));
+  if (smoothed.length < 2) {
+    return null;
+  }
+  return {
+    id,
+    className: "trunk",
+    width: V2_SETTLEMENT_CONFIG.roads.width,
+    points: smoothed,
+    bezierDebug: beziers
+  };
+};
+
 const closestRoadFacingDirectionAt = (x: number, y: number, roads: RoadSegment[], maxDistance: number): Point | null => {
   if (roads.length === 0 || maxDistance <= 0) {
     return null;
@@ -492,7 +637,8 @@ const drivewayEndNode = (house: House, targetPoint?: Point, options: DrivewayNod
     const forwardDistance = toTargetX * forwardX + toTargetY * forwardY;
     const desired = forwardDistance - V2_SETTLEMENT_CONFIG.roads.width * 0.38;
     const maxLength = options.preferShort ? Math.max(3.8, defaultDrivewayLength * 0.66) : defaultDrivewayLength;
-    drivewayLength = clamp(desired, minDrivewayLength, maxLength);
+    const minLength = Math.max(minDrivewayLength, options.minOutwardLength ?? minDrivewayLength);
+    drivewayLength = clamp(desired, minLength, maxLength);
   }
 
   return {
@@ -665,6 +811,14 @@ const blendDirections = (ax: number, ay: number, bx: number, by: number, bWeight
   return normalizeDirection(ax, ay) ?? { x: 1, y: 0 };
 };
 
+const sampleCubicBezier = (p0: Point, p1: Point, p2: Point, p3: Point, t: number): Point => {
+  const omt = 1 - t;
+  return {
+    x: omt * omt * omt * p0.x + 3 * omt * omt * t * p1.x + 3 * omt * t * t * p2.x + t * t * t * p3.x,
+    y: omt * omt * omt * p0.y + 3 * omt * omt * t * p1.y + 3 * omt * t * t * p2.y + t * t * t * p3.y
+  };
+};
+
 const chaikinSmooth = (points: Point[], passes: number): Point[] => {
   let current = points;
   for (let pass = 0; pass < passes; pass += 1) {
@@ -717,4 +871,32 @@ const smoothRoadPath = (points: Point[]): Point[] => {
   }
   const passes = deduped.length >= 6 ? 2 : 1;
   return dedupeRoadPoints(chaikinSmooth(deduped, passes));
+};
+
+const roadClearsSourceHouse = (road: RoadSegment, house: House): boolean => {
+  if (road.points.length < 3) {
+    return true;
+  }
+  const centerClearance = Math.min(house.width, house.depth) * 0.44;
+  for (let i = 2; i < road.points.length; i += 1) {
+    const a = road.points[i - 1];
+    const b = road.points[i];
+    if (distancePointToSegment(house.x, house.y, a.x, a.y, b.x, b.y) < centerClearance) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const distancePointToSegment = (px: number, py: number, ax: number, ay: number, bx: number, by: number): number => {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const lenSq = vx * vx + vy * vy;
+  if (lenSq <= 1e-6) {
+    return Math.hypot(px - ax, py - ay);
+  }
+  const t = clamp(((px - ax) * vx + (py - ay) * vy) / lenSq, 0, 1);
+  const qx = ax + vx * t;
+  const qy = ay + vy * t;
+  return Math.hypot(px - qx, py - qy);
 };
