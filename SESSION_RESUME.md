@@ -17,7 +17,7 @@ This file is the handoff checkpoint for the next coding session.
 
 1. Stage 3 is now visually much better.
 2. Stage 4 appears to have little/no visible effect in normal play.
-3. Stages 1-3 are still not "done" from a product perspective.
+3. Stages 1-3 are still not "done" from a product perspective. -- Stage 3 appears to have good results, but not enough roads are splitting off (and not long enough).
 4. `src/v2/generator.ts` is too large and violates maintainability expectations in `AGENTS.md` (single-purpose modules, clean separation of concerns).
 5. Request for this handoff:
   - Document exactly what to resume next.
