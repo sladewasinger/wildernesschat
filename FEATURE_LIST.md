@@ -172,6 +172,9 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Seam validator default-off to avoid chunk-build stalls in normal play.
 - [ ] Profiling pass for chunk build hotspots (terrain sampling vs settlement synthesis vs overlay draw).
 - [x] Directional chunk prefetch based on movement vector.
+- [ ] Add terrain tile raster cache (render once per world tile, then blit during camera movement).
+- [ ] Move terrain rasterization to `OffscreenCanvas`/worker to keep camera updates smooth under load.
+- [ ] Add incremental terrain redraw policy (only re-raster tiles when camera crosses tile thresholds).
 
 ### Phase 11: Settlement Layout Graph Refactor
 
@@ -191,6 +194,7 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Implement anchor-house + long-trunk-road stage.
 - [x] Implement iterative house growth stage off trunk roads.
 - [x] Implement Y-branch + shortcut stage for organic local variation.
+- [x] Prototype house-first local village synthesis (anchor house -> clustered houses -> connective local paths/loops).
 - [x] Implement inter-village connector stage (deterministic nearest-village targeting with outward-road fallback when full links fail).
 - [ ] Rework Stage 4 into a road-first continuity model so long roads remain visible during travel even without nearby discovered villages.
 - [x] Add V2 centralized tuning constants for zoom/contour/sizing/clearance controls.

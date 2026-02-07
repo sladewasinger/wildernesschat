@@ -13,9 +13,9 @@ type InputState = {
 
 const STAGE_LABELS = [
   "0 Terrain Only",
-  "1 Anchor House + Trunk",
-  "2 Iterative House Growth",
-  "3 Y-Branches + Shortcuts",
+  "1 Anchor House",
+  "2 House Cluster + Paths",
+  "3 Expanded Cluster + Loops",
   "4 Road-First Continuity"
 ];
 

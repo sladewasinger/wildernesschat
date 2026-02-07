@@ -3,8 +3,7 @@ import { hashString } from "../gen/hash";
 import { V2_SETTLEMENT_CONFIG, V2_STAGE_MAX, V2_STAGE_MIN } from "./config";
 import { V2TerrainSampler } from "./terrain";
 import { RoadSegment, VillagePlan, VillageSite } from "./types";
-import { addBranches } from "./generator/branching";
-import { buildAnchorPlacement, growHousesAlongRoad } from "./generator/housing";
+import { buildHouseFirstVillagePlan } from "./generator/house-first";
 import {
   addInterVillageConnectors,
   collectContinuityRoadsInBounds,
@@ -13,9 +12,6 @@ import {
   Stage4ContinuityContext
 } from "./generator/inter-village";
 import { collectSitesInBounds, SiteSelectionContext } from "./generator/site-selection";
-import { addShortcuts } from "./generator/shortcuts";
-import { pickStage3GrowthProfile } from "./generator/stage3-profile";
-import { buildTrunkRoad } from "./generator/trunk";
 
 export class V2SettlementGenerator {
   private readonly siteSeed: number;
@@ -71,48 +67,20 @@ export class V2SettlementGenerator {
       shortcutCount: 0,
       connectorCount: 0
     };
-    const trunk = buildTrunkRoad(site, this.planSeed);
 
+    let primaryRoad: RoadSegment | null = null;
     if (stageValue >= 1) {
-      const anchor = buildAnchorPlacement(site, trunk, this.planSeed);
-      roads.push(trunk);
-      roads.push(anchor.driveRoad);
-      houses.push(anchor.house);
-    }
-
-    if (stageValue >= 2) {
-      growHousesAlongRoad({
+      const planLocal = buildHouseFirstVillagePlan({
         site,
-        road: trunk,
-        slotCount: V2_SETTLEMENT_CONFIG.stage2.trunkGrowth.slotCount,
-        roads,
-        houses,
-        seed: hashString(`${site.id}:trunk-growth`),
-        threshold: V2_SETTLEMENT_CONFIG.stage2.trunkGrowth.threshold,
+        stage: stageValue,
+        planSeed: this.planSeed,
         terrain: this.terrain
       });
-    }
-
-    if (stageValue >= 3) {
-      const growthProfile = pickStage3GrowthProfile(site, this.planSeed);
-      metrics.branchCount = addBranches({
-        site,
-        trunk,
-        roads,
-        houses,
-        allowReuseHeuristic: stageValue >= 4,
-        planSeed: this.planSeed,
-        terrain: this.terrain,
-        growthProfile
-      });
-      metrics.shortcutCount = addShortcuts({
-        site,
-        roads,
-        houses,
-        terrain: this.terrain,
-        maxCount: growthProfile.shortcutMaxCount,
-        pairChanceThreshold: growthProfile.shortcutPairChance
-      });
+      roads.push(...planLocal.roads);
+      houses.push(...planLocal.houses);
+      metrics.branchCount = planLocal.branchCount;
+      metrics.shortcutCount = planLocal.shortcutCount;
+      primaryRoad = planLocal.primaryRoad;
     }
 
     if (stageValue >= 4) {
@@ -125,7 +93,14 @@ export class V2SettlementGenerator {
       );
       metrics.connectorCount = addInterVillageConnectors({
         site,
-        trunk,
+        trunk:
+          primaryRoad ??
+          ({
+            id: `rt-${site.id}`,
+            className: "trunk",
+            width: V2_SETTLEMENT_CONFIG.roads.width,
+            points: [{ x: site.x - 1, y: site.y }, { x: site.x + 1, y: site.y }]
+          } satisfies RoadSegment),
         roads,
         houses,
         planSeed: this.planSeed,

@@ -111,13 +111,15 @@ This project uses deterministic procedural generation with clear module boundari
 - `src/v2/generator/trunk.ts`
   - Trunk and directional road primitives used by branch/connectors.
 - `src/v2/generator/housing.ts`
-  - Anchor placement and iterative house/drive growth along roads.
+  - Shared house placement helpers (occupancy checks and road/house clearance utilities).
+- `src/v2/generator/house-first.ts`
+  - House-first local village synthesis (anchor house, cluster expansion, and house-connection road graph).
 - `src/v2/generator/branching.ts`
-  - Stage 3 branch road synthesis and fallback branch behavior.
+  - Legacy Stage 3 branch synthesis module from trunk-first track (kept for reference).
 - `src/v2/generator/stage3-profile.ts`
-  - Deterministic per-site Stage 3 growth profile selection (`sparse`, `normal`, `dense`, `burst`) for branch/shortcut volume.
+  - Legacy Stage 3 growth-profile module from trunk-first track.
 - `src/v2/generator/shortcuts.ts`
-  - Stage 3 shortcut link synthesis between branch endpoints.
+  - Legacy shortcut-link synthesis module from trunk-first track.
 - `src/v2/generator/inter-village.ts`
   - Stage 4 road-first continuity generation with village-seeded, terrain-following long roads.
   - Exposes continuity-road queries by bounds/near-site so long roads persist during exploration.

@@ -39,6 +39,19 @@ export const V2_SETTLEMENT_CONFIG = {
     trunkGrowth: {
       slotCount: 14,
       threshold: 0.8
+    },
+    houseFirst: {
+      targetHouseCount: 5,
+      candidateAttempts: 120,
+      roadNodeOffset: 9,
+      clusterRadiusMin: 84,
+      clusterRadiusMax: 188,
+      clusterSpacingPaddingExtra: 10,
+      roadsideInfillMaxHouses: 3,
+      roadsideInfillSlotCount: 4,
+      roadsideInfillChance: 0.48,
+      roadsideInfillThreshold: 0.69,
+      roadsideSpacingPaddingExtra: 6
     }
   },
   stage3: {
@@ -103,6 +116,15 @@ export const V2_SETTLEMENT_CONFIG = {
         shortcutMaxCount: 3,
         shortcutPairChance: 0.74
       }
+    },
+    houseFirst: {
+      extraHouseCount: 2,
+      extraCandidateAttempts: 100,
+      maxLoopRoads: 3,
+      loopPairChance: 0.68,
+      roadsideInfillExtraMaxHouses: 3,
+      roadsideInfillChance: 0.62,
+      roadsideInfillThreshold: 0.63
     }
   },
   stage4: {
@@ -124,9 +146,9 @@ export const V2_SETTLEMENT_CONFIG = {
       candidateTurnTries: 3,
       candidateTurnStepRad: 0.24,
       mergeCacheQuantize: 96,
-      graphEndpointSnapRadius: 250,
-      graphNodeSnapRadius: 125,
-      graphJunctionMergeLength: 200,
+      graphEndpointSnapRadius: 16,
+      graphNodeSnapRadius: 10,
+      graphJunctionMergeLength: 34,
       graphMinEdgeLength: 6,
       graphStubPruneLength: 72,
       maxSlope: 0.11

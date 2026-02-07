@@ -5,8 +5,8 @@ import { V2_SETTLEMENT_CONFIG } from "../config";
 import { V2TerrainSampler } from "../terrain";
 import { House, Point, RoadSegment, VillageSite } from "../types";
 import { polylineLength, sampleRoad } from "./geometry";
+import { buildHouseFirstVillagePlan } from "./house-first";
 import { SiteSelectionContext, collectSitesInBounds } from "./site-selection";
-import { buildTrunkRoad } from "./trunk";
 
 export type Stage4ContinuityContext = {
   continuitySeed: number;
@@ -178,15 +178,25 @@ const continuityRoadsForSite = (
     return cached;
   }
 
-  const trunk = buildTrunkRoad(site, planSeed);
+  const houseFirst = buildHouseFirstVillagePlan({
+    site,
+    stage: 3,
+    planSeed,
+    terrain: context.terrain
+  });
+  const spineRoad = houseFirst.primaryRoad ?? houseFirst.roads.find((road) => road.className !== "drive");
+  if (!spineRoad || spineRoad.points.length < 2) {
+    context.roadCache.set(site.id, []);
+    return [];
+  }
   const roads: RoadSegment[] = [];
 
-  const sideA = buildContinuityRoadFromTrunkEndpoint(context, site, trunk, planSeed, 0);
+  const sideA = buildContinuityRoadFromTrunkEndpoint(context, site, spineRoad, planSeed, 0);
   if (sideA) {
     roads.push(sideA);
   }
 
-  const sideB = buildContinuityRoadFromTrunkEndpoint(context, site, trunk, planSeed, 1);
+  const sideB = buildContinuityRoadFromTrunkEndpoint(context, site, spineRoad, planSeed, 1);
   if (sideB) {
     roads.push(sideB);
   }
