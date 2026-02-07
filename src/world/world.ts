@@ -126,6 +126,14 @@ export class World {
     }
 
     ctx.putImageData(image, 0, 0);
+    const maskMode = this.debug.showWaterMask || this.debug.showMoisture || this.debug.showForestMask;
+    if (maskMode) {
+      if (this.debug.showRivers) {
+        this.drawRivers(ctx, startX, startY, chunkSize);
+      }
+      return canvas;
+    }
+
     this.drawRivers(ctx, startX, startY, chunkSize);
     const featureMargin = 140;
     const features = this.settlements.getFeaturesForBounds(
@@ -158,19 +166,37 @@ export class World {
     }
 
     if (this.debug.showMoisture) {
+      const moisture = clamp(terrain.moisture, 0, 1);
+      if (moisture < 0.33) {
+        const t = moisture / 0.33;
+        return {
+          r: lerp(25, 52, t),
+          g: lerp(45, 122, t),
+          b: lerp(120, 112, t)
+        };
+      }
+      if (moisture < 0.66) {
+        const t = (moisture - 0.33) / 0.33;
+        return {
+          r: lerp(52, 116, t),
+          g: lerp(122, 178, t),
+          b: lerp(112, 64, t)
+        };
+      }
+      const t = (moisture - 0.66) / 0.34;
       return {
-        r: lerp(30, 170, terrain.moisture),
-        g: lerp(48, 220, terrain.moisture),
-        b: lerp(42, 120, terrain.moisture)
+        r: lerp(116, 222, t),
+        g: lerp(178, 201, t),
+        b: lerp(64, 78, t)
       };
     }
 
     if (this.debug.showForestMask) {
       const density = this.terrain.forestDensityAt(worldX, worldY);
       return {
-        r: lerp(36, 180, density),
-        g: lerp(52, 205, density),
-        b: lerp(36, 150, density)
+        r: lerp(18, 95, density),
+        g: lerp(27, 198, density),
+        b: lerp(22, 74, density)
       };
     }
 
@@ -178,13 +204,12 @@ export class World {
 
     if (terrain.waterDepth > 0) {
       const depth = clamp(terrain.waterDepth / 0.24, 0, 1);
-      const ripple = Math.sin((worldX + worldY * 0.31) * 0.045 + depth * 6) * 0.5 + 0.5;
       const coastal = terrain.shore;
 
       return {
-        r: lerp(110, 18, depth) + ripple * 4 + coastal * 24 + noiseGrain * 0.25,
-        g: lerp(152, 42, depth) + ripple * 5 + coastal * 20 + noiseGrain * 0.25,
-        b: lerp(184, 76, depth) + ripple * 8 + coastal * 10 + noiseGrain * 0.2
+        r: lerp(105, 28, depth) + coastal * 20,
+        g: lerp(154, 70, depth) + coastal * 16,
+        b: lerp(202, 130, depth) + coastal * 8
       };
     }
 
@@ -346,11 +371,21 @@ export class World {
 
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        ctx.strokeStyle = road.type === "major" ? "rgba(72, 72, 58, 0.55)" : "rgba(78, 82, 70, 0.45)";
-        ctx.lineWidth = road.width + 2.2;
+        ctx.strokeStyle =
+          road.type === "major"
+            ? "rgba(72, 72, 58, 0.55)"
+            : road.type === "minor"
+              ? "rgba(78, 82, 70, 0.45)"
+              : "rgba(80, 87, 71, 0.42)";
+        ctx.lineWidth = road.width + (road.type === "local" ? 1.4 : 2.2);
         ctx.stroke();
 
-        ctx.strokeStyle = road.type === "major" ? "rgba(215, 206, 166, 0.98)" : "rgba(199, 191, 154, 0.92)";
+        ctx.strokeStyle =
+          road.type === "major"
+            ? "rgba(215, 206, 166, 0.98)"
+            : road.type === "minor"
+              ? "rgba(199, 191, 154, 0.92)"
+              : "rgba(201, 198, 170, 0.9)";
         ctx.lineWidth = road.width;
         ctx.stroke();
       }
@@ -371,6 +406,15 @@ export class World {
       const x = village.x - startX;
       const y = village.y - startY;
       const radius = clamp(village.radius * 0.1, 4, 10);
+      const influence = clamp(village.radius, 36, 105);
+      ctx.fillStyle = "rgba(214, 224, 176, 0.12)";
+      ctx.beginPath();
+      ctx.arc(x, y, influence, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(100, 122, 76, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
       ctx.fillStyle = "rgba(247, 236, 201, 0.88)";
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);

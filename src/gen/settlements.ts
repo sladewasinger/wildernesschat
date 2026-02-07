@@ -13,7 +13,7 @@ export type Village = {
   cellY: number;
 };
 
-export type RoadType = "major" | "minor";
+export type RoadType = "major" | "minor" | "local";
 
 export type Road = {
   id: string;
@@ -236,8 +236,10 @@ export class SettlementSystem {
     const coreMaxY = coreMinY + regionSize;
     const margin = this.config.roads.maxConnectionDistance + this.config.settlement.cellSize;
     const villages = this.collectVillagesInBounds(coreMinX - margin, coreMaxX + margin, coreMinY - margin, coreMaxY + margin);
-    const roads = this.buildRoadNetwork(villages);
-    const houses = this.generateHouses(roads);
+    const regionalRoads = this.buildRoadNetwork(villages);
+    const localRoads = this.buildLocalRoads(villages);
+    const roads = [...regionalRoads, ...localRoads];
+    const houses = this.generateHouses(roads, villages);
 
     const regionRoads = roads.filter((road) => {
       const mid = roadMidpoint(road);
@@ -533,6 +535,65 @@ export class SettlementSystem {
     return roads;
   }
 
+  private buildLocalRoads(villages: Village[]): Road[] {
+    const roads: Road[] = [];
+
+    for (const village of villages) {
+      const localSeed = hashString(`${this.config.seed}:local-road:${village.id}`);
+      const spokeCount = 2 + Math.floor(hashToUnit(hashCoords(localSeed, village.cellX, village.cellY, 71)) * 4);
+      const baseAngle = hashToUnit(hashCoords(localSeed, village.cellX, village.cellY, 83)) * Math.PI * 2;
+
+      for (let spoke = 0; spoke < spokeCount; spoke += 1) {
+        const angleJitter = (hashToUnit(hashCoords(localSeed, spoke, 0, 97)) * 2 - 1) * 0.55;
+        const angle = baseAngle + (spoke / spokeCount) * Math.PI * 2 + angleJitter;
+        const length = village.radius * lerp(1.5, 2.7, hashToUnit(hashCoords(localSeed, spoke, 0, 101)));
+        const segments = 3 + Math.floor(hashToUnit(hashCoords(localSeed, spoke, 0, 109)) * 3);
+        const points: { x: number; y: number }[] = [];
+
+        for (let i = 0; i <= segments; i += 1) {
+          const t = i / segments;
+          const wobble = Math.sin(t * Math.PI) * (hashToUnit(hashCoords(localSeed, spoke, i, 131)) * 2 - 1) * 24;
+          const x = village.x + Math.cos(angle) * length * t + Math.cos(angle + Math.PI * 0.5) * wobble;
+          const y = village.y + Math.sin(angle) * length * t + Math.sin(angle + Math.PI * 0.5) * wobble;
+          points.push({ x, y });
+        }
+
+        points[0] = { x: village.x, y: village.y };
+        for (let pass = 0; pass < 1; pass += 1) {
+          for (let i = 1; i < points.length - 1; i += 1) {
+            points[i] = {
+              x: points[i - 1].x * 0.22 + points[i].x * 0.56 + points[i + 1].x * 0.22,
+              y: points[i - 1].y * 0.22 + points[i].y * 0.56 + points[i + 1].y * 0.22
+            };
+          }
+        }
+
+        let valid = true;
+        for (let i = 1; i < points.length; i += 1) {
+          const sample = this.terrain.sample(points[i].x, points[i].y);
+          if (sample.waterDepth > 0.007) {
+            valid = false;
+            break;
+          }
+        }
+        if (!valid) {
+          continue;
+        }
+
+        roads.push({
+          id: `rl-${village.id}-${spoke}`,
+          type: "local",
+          width: this.config.roads.localWidth,
+          points,
+          fromVillageId: village.id,
+          toVillageId: village.id
+        });
+      }
+    }
+
+    return roads;
+  }
+
   private estimateConnectionCost(a: Village, b: Village, distance: number): number {
     const steps = Math.max(3, Math.round(distance / 110));
     let penalty = 0;
@@ -609,9 +670,13 @@ export class SettlementSystem {
     return points;
   }
 
-  private generateHouses(roads: Road[]): House[] {
+  private generateHouses(roads: Road[], villages: Village[]): House[] {
     const houses: House[] = [];
     const minSeparation = 12;
+    const villageById = new Map<string, Village>();
+    for (const village of villages) {
+      villageById.set(village.id, village);
+    }
 
     for (const road of roads) {
       for (let i = 1; i < road.points.length; i += 1) {
@@ -633,13 +698,33 @@ export class SettlementSystem {
           const t = step / count;
           const baseX = lerp(a.x, b.x, t);
           const baseY = lerp(a.y, b.y, t);
+          const nearStartVillage = villageById.get(road.fromVillageId);
+          const nearEndVillage = villageById.get(road.toVillageId);
+
+          if (road.type === "major") {
+            const endBias = Math.max(1 - t * 2, 1 - (1 - t) * 2);
+            if (endBias < 0.2) {
+              continue;
+            }
+          }
+
+          if (road.type === "minor" && nearStartVillage && nearEndVillage) {
+            const toStart = Math.hypot(baseX - nearStartVillage.x, baseY - nearStartVillage.y);
+            const toEnd = Math.hypot(baseX - nearEndVillage.x, baseY - nearEndVillage.y);
+            const maxRange = Math.max(nearStartVillage.radius, nearEndVillage.radius) * 2.7;
+            if (Math.min(toStart, toEnd) > maxRange) {
+              continue;
+            }
+          }
 
           for (const side of [-1, 1] as const) {
             const sideSalt = side === -1 ? 13 : 29;
             const baseHash = hashString(`${road.id}:${i}:${step}:${sideSalt}`);
             const localSeed = this.houseSeed ^ baseHash;
+            const typeChance =
+              road.type === "major" ? this.config.houses.sideChance * 0.28 : road.type === "minor" ? this.config.houses.sideChance * 0.58 : this.config.houses.sideChance * 0.9;
             const chanceRoll = hashToUnit(hashCoords(localSeed, i, step, 31));
-            if (chanceRoll > this.config.houses.sideChance) {
+            if (chanceRoll > typeChance) {
               continue;
             }
 

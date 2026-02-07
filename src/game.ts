@@ -122,9 +122,10 @@ export class Game {
     ctx.stroke();
 
     this.hud.textContent = [
-      "Organic village generator (phase 0-3)",
+      "Organic village generator (phase 0-4 early)",
       "Move: WASD / Arrows",
       "Debug: 1 water 2 moisture 3 forest 4 contours 5 rivers 6 roads 7 villages 8 houses",
+      "Mask modes (1/2/3) hide roads/houses/trees for readability",
       `Seed: ${this.world.getSeed()}`,
       `Player px: ${this.playerX.toFixed(1)}, ${this.playerY.toFixed(1)}`,
       `Chunk: ${floorDiv(this.playerX, chunkSize)}, ${floorDiv(this.playerY, chunkSize)}`,

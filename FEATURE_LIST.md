@@ -122,7 +122,7 @@ All generation modules should accept config and RNG explicitly (no hidden global
 
 ### Phase 4: Local Streets + Buildings
 
-- [ ] Village-local street growth.
+- [x] Village-local street growth (first-pass spoke/curved local roads).
 - [ ] Parcel frontage extraction.
 - [x] House footprint placement and orientation (roadside procedural pass implemented early; parcel system pending).
 
@@ -151,7 +151,7 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Organic terrain/water generator implemented.
 - [x] Village prior model implemented.
 - [x] Regional highway generator implemented.
-- [ ] Local village street generator implemented.
+- [x] Local village street generator implemented (first pass).
 - [x] Curved-road-aligned building placement implemented.
 - [ ] Forest and field generation implemented.
 - [x] Full chunk streaming for new pipeline implemented.

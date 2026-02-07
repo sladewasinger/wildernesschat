@@ -9,7 +9,7 @@ const run = (): void => {
   if (!canvas || !hud) throw new Error("Missing #game canvas or #hud element.");
 
   const params = new URLSearchParams(window.location.search);
-  const seed = params.get("seed") ?? "watabou-like-prototype";
+  const seed = params.get("seed") ?? "12345abcde";
   const chunkSize = Number(params.get("chunkSize") ?? "320");
   const seaLevel = Number(params.get("seaLevel") ?? "NaN");
 

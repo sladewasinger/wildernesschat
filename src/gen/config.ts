@@ -47,6 +47,7 @@ export type RoadConfig = {
   loopChance: number;
   majorWidth: number;
   minorWidth: number;
+  localWidth: number;
   routeStep: number;
   maxCurvatureOffset: number;
 };
@@ -139,6 +140,7 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
       loopChance: 0.22,
       majorWidth: 8.8,
       minorWidth: 5.2,
+      localWidth: 3.7,
       routeStep: 80,
       maxCurvatureOffset: 70
     },
