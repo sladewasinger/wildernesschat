@@ -110,6 +110,7 @@ This project uses deterministic procedural generation with clear module boundari
   - Stage 2 iterative house growth from trunk
   - Stage 3 Y-branches + shortcuts
   - Stage 4 inter-village connectors + reuse-vs-new road decisions
+  - Current technical debt: this file is too large and must be split into focused generator submodules before adding major new behavior.
 - `src/v2/app.ts`
   - Rendering and stage controls (`1-5` or `[ ]`) for visual verification.
 
