@@ -30,14 +30,16 @@ export class V2App {
   private playerY = 0;
   private lastTime = 0;
   private stage = 2;
+  private zoom = 1.45;
 
-  constructor(canvas: HTMLCanvasElement, hud: HTMLElement, seed: string, initialStage: number) {
+  constructor(canvas: HTMLCanvasElement, hud: HTMLElement, seed: string, initialStage: number, initialZoom: number) {
     this.canvas = canvas;
     this.hud = hud;
     this.seed = seed;
     this.terrain = new V2TerrainSampler(seed);
     this.generator = new V2SettlementGenerator(seed, this.terrain);
     this.stage = clamp(initialStage | 0, 0, 3);
+    this.zoom = clamp(initialZoom, 0.65, 2.8);
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
@@ -49,6 +51,7 @@ export class V2App {
     window.addEventListener("resize", this.resize);
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
+    window.addEventListener("wheel", this.onWheel, { passive: false });
     this.resize();
   }
 
@@ -73,6 +76,8 @@ export class V2App {
     if (event.key === "4") this.stage = 3;
     if (event.key === "]") this.stage = clamp(this.stage + 1, 0, 3);
     if (event.key === "[") this.stage = clamp(this.stage - 1, 0, 3);
+    if (event.key === "=" || event.key === "+") this.zoom = clamp(this.zoom * 1.12, 0.65, 2.8);
+    if (event.key === "-" || event.key === "_") this.zoom = clamp(this.zoom / 1.12, 0.65, 2.8);
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -80,6 +85,15 @@ export class V2App {
     if (event.key === "s" || event.key === "ArrowDown") this.input.down = false;
     if (event.key === "a" || event.key === "ArrowLeft") this.input.left = false;
     if (event.key === "d" || event.key === "ArrowRight") this.input.right = false;
+  };
+
+  private readonly onWheel = (event: WheelEvent): void => {
+    event.preventDefault();
+    if (event.deltaY < 0) {
+      this.zoom = clamp(this.zoom * 1.1, 0.65, 4);
+    } else if (event.deltaY > 0) {
+      this.zoom = clamp(this.zoom / 1.1, 0.65, 4);
+    }
   };
 
   private readonly tick = (time: number): void => {
@@ -115,20 +129,24 @@ export class V2App {
     const height = this.canvas.height;
     const halfW = width * 0.5;
     const halfH = height * 0.5;
+    const viewWidth = width / this.zoom;
+    const viewHeight = height / this.zoom;
+    const viewMinX = this.playerX - viewWidth * 0.5;
+    const viewMinY = this.playerY - viewHeight * 0.5;
 
-    this.drawTerrain(ctx, width, height, halfW, halfH);
+    this.drawTerrain(ctx, width, height, viewMinX, viewMinY);
 
     const margin = 360;
-    const minX = this.playerX - halfW - margin;
-    const maxX = this.playerX + halfW + margin;
-    const minY = this.playerY - halfH - margin;
-    const maxY = this.playerY + halfH + margin;
+    const minX = this.playerX - viewWidth * 0.5 - margin;
+    const maxX = this.playerX + viewWidth * 0.5 + margin;
+    const minY = this.playerY - viewHeight * 0.5 - margin;
+    const maxY = this.playerY + viewHeight * 0.5 + margin;
     const sites = this.generator.collectSitesInBounds(minX, maxX, minY, maxY);
 
     for (const site of sites) {
       const plan = this.generator.buildVillagePlan(site, this.stage);
-      this.drawRoads(plan.roads, halfW, halfH);
-      this.drawHouses(plan.houses, halfW, halfH);
+      this.drawRoads(plan.roads, viewMinX, viewMinY);
+      this.drawHouses(plan.houses, viewMinX, viewMinY);
     }
 
     ctx.fillStyle = "#efe5c8";
@@ -145,21 +163,27 @@ export class V2App {
       "Village Generator V2 Sandbox",
       "Move: WASD / Arrows",
       "Stage: 1-4 keys (or [ / ])",
+      "Zoom: +/- keys or mouse wheel",
       `Current: ${STAGE_LABELS[this.stage]}`,
       `Seed: ${this.seed}`,
+      `Zoom: ${this.zoom.toFixed(2)}x`,
       `Player px: ${this.playerX.toFixed(1)}, ${this.playerY.toFixed(1)}`,
       `Chunk-ish: ${floorDiv(this.playerX, 320)}, ${floorDiv(this.playerY, 320)}`,
       `Terrain: elev=${terrain.toFixed(3)} slope=${slope.toFixed(3)}`,
+      "Contour grid: 4 world units",
       `Visible sites: ${sites.length}`
     ].join("\n");
   }
 
-  private drawTerrain(ctx: CanvasRenderingContext2D, width: number, height: number, halfW: number, halfH: number): void {
-    const step = 6;
-    for (let sy = 0; sy < height; sy += step) {
-      for (let sx = 0; sx < width; sx += step) {
-        const wx = this.playerX + (sx - halfW);
-        const wy = this.playerY + (sy - halfH);
+  private drawTerrain(ctx: CanvasRenderingContext2D, width: number, height: number, viewMinX: number, viewMinY: number): void {
+    const worldStep = 4;
+    const viewMaxX = viewMinX + width / this.zoom;
+    const viewMaxY = viewMinY + height / this.zoom;
+    const startWX = Math.floor(viewMinX / worldStep) * worldStep;
+    const startWY = Math.floor(viewMinY / worldStep) * worldStep;
+
+    for (let wy = startWY; wy <= viewMaxY + worldStep; wy += worldStep) {
+      for (let wx = startWX; wx <= viewMaxX + worldStep; wx += worldStep) {
         const elevation = this.terrain.elevationAt(wx, wy);
         const contour = Math.abs((elevation * 22) % 1 - 0.5);
 
@@ -173,24 +197,27 @@ export class V2App {
         }
 
         ctx.fillStyle = `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
-        ctx.fillRect(sx, sy, step + 1, step + 1);
+        const sx = Math.floor((wx - viewMinX) * this.zoom);
+        const sy = Math.floor((wy - viewMinY) * this.zoom);
+        const size = Math.ceil(worldStep * this.zoom) + 1;
+        ctx.fillRect(sx, sy, size, size);
       }
     }
   }
 
-  private drawRoads(roads: RoadSegment[], halfW: number, halfH: number): void {
+  private drawRoads(roads: RoadSegment[], viewMinX: number, viewMinY: number): void {
     const ordered = roads.slice().sort((a, b) => this.roadPriority(a.className) - this.roadPriority(b.className));
     for (const road of ordered) {
-      this.drawRoad(road, halfW, halfH);
+      this.drawRoad(road, viewMinX, viewMinY);
     }
   }
 
-  private drawRoad(road: RoadSegment, halfW: number, halfH: number): void {
+  private drawRoad(road: RoadSegment, viewMinX: number, viewMinY: number): void {
     const path = new Path2D();
     for (let i = 0; i < road.points.length; i += 1) {
       const p = road.points[i];
-      const x = p.x - this.playerX + halfW;
-      const y = p.y - this.playerY + halfH;
+      const x = (p.x - viewMinX) * this.zoom;
+      const y = (p.y - viewMinY) * this.zoom;
       if (i === 0) {
         path.moveTo(x, y);
       } else {
@@ -220,28 +247,28 @@ export class V2App {
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = "rgba(8, 10, 11, 0.9)";
-    ctx.lineWidth = road.width + outlinePad;
+    ctx.lineWidth = (road.width + outlinePad) * this.zoom;
     ctx.stroke(path);
     ctx.strokeStyle = fill;
-    ctx.lineWidth = road.width;
+    ctx.lineWidth = road.width * this.zoom;
     ctx.stroke(path);
     ctx.restore();
   }
 
-  private drawHouses(houses: House[], halfW: number, halfH: number): void {
+  private drawHouses(houses: House[], viewMinX: number, viewMinY: number): void {
     for (const house of houses) {
-      this.drawHouse(house, halfW, halfH);
+      this.drawHouse(house, viewMinX, viewMinY);
     }
   }
 
-  private drawHouse(house: House, halfW: number, halfH: number): void {
-    const x = house.x - this.playerX + halfW;
-    const y = house.y - this.playerY + halfH;
+  private drawHouse(house: House, viewMinX: number, viewMinY: number): void {
+    const x = (house.x - viewMinX) * this.zoom;
+    const y = (house.y - viewMinY) * this.zoom;
     const angle = house.angle;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
-    const hw = house.width * 0.5;
-    const hd = house.depth * 0.5;
+    const hw = house.width * 0.5 * this.zoom;
+    const hd = house.depth * 0.5 * this.zoom;
 
     const corners = [
       this.rotatePoint(-hw, -hd, cos, sin, x, y),
@@ -272,15 +299,15 @@ export class V2App {
     ctx.fillStyle = "rgba(24, 32, 38, 0.35)";
     this.fillPolygon(
       corners.map((corner) => ({
-        x: corner.x + 4,
-        y: corner.y + 4
+        x: corner.x + 4 * this.zoom,
+        y: corner.y + 4 * this.zoom
       }))
     );
 
     this.fillPolygon(corners, topIsLight ? roofDark : roofLight);
     this.fillPolygon(topHalf, topIsLight ? roofLight : roofDark);
     this.fillPolygon(bottomHalf, topIsLight ? roofDark : roofLight);
-    this.strokePolygon(corners, "rgba(11, 15, 16, 0.94)", 2);
+    this.strokePolygon(corners, "rgba(11, 15, 16, 0.94)", Math.max(1.3, 2 * this.zoom));
   }
 
   private roofColor(tone: number, light: boolean): string {

@@ -2,6 +2,17 @@
 
 This repo is now running an organic terrain/water/settlement generator with phase 5-7 systems in place (land-use blending, streaming/perf controls, determinism tooling) toward a Watabou-style village/countryside map.
 
+Sample target images:
+
+No water:
+https://watabou.github.io/village-generator/?seed=1788719630&tags=organic,no%20square,isolated
+
+River:
+https://watabou.github.io/village-generator/?seed=1535246558&tags=river,no%20square,highway
+
+Beach Front:
+https://watabou.github.io/village-generator/?seed=299423630&tags=coast,dead%20end&trees=423147338
+
 ## Current Run Command
 
 ```bash
@@ -14,7 +25,7 @@ Open `http://localhost:5173`.
 Parallel sandbox prototype:
 
 - `http://localhost:5173/v2.html`
-- Optional params: `seed`, `stage` (`0..3`)
+- Optional params: `seed`, `stage` (`0..3`), `zoom` (`0.65..2.8`)
 
 ## Query Params
 
@@ -38,6 +49,8 @@ Example:
 ## Runtime Controls
 
 - Move: `WASD` / Arrow Keys
+- V2 sandbox stage: `1..4` (or `[` / `]`)
+- V2 sandbox zoom: `+` / `-` or mouse wheel
 
 ## Current Generator Layers
 

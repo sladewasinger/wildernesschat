@@ -21,6 +21,11 @@ type RoadSample = {
   tangentY: number;
 };
 
+type AnchorPlacement = {
+  house: House;
+  driveRoad: RoadSegment;
+};
+
 export class V2SettlementGenerator {
   private readonly siteSeed: number;
   private readonly planSeed: number;
@@ -71,8 +76,10 @@ export class V2SettlementGenerator {
     const trunk = this.buildTrunkRoad(site);
 
     if (stageValue >= 1) {
+      const anchor = this.buildAnchorPlacement(site, trunk);
       roads.push(trunk);
-      houses.push(this.buildAnchorHouse(site, trunk));
+      roads.push(anchor.driveRoad);
+      houses.push(anchor.house);
     }
 
     if (stageValue >= 2) {
@@ -81,7 +88,7 @@ export class V2SettlementGenerator {
 
     if (stageValue >= 3) {
       this.addBranches(site, trunk, roads, houses);
-      this.addShortcuts(site, roads);
+      this.addShortcuts(site, roads, houses);
     }
 
     const plan: VillagePlan = { site, roads, houses };
@@ -177,7 +184,7 @@ export class V2SettlementGenerator {
     };
   }
 
-  private buildAnchorHouse(site: VillageSite, trunk: RoadSegment): House {
+  private buildAnchorPlacement(site: VillageSite, trunk: RoadSegment): AnchorPlacement {
     const sample = this.sampleRoad(trunk.points, 0.52);
     const side: -1 | 1 = hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 89)) < 0.5 ? -1 : 1;
     const normalX = -sample.tangentY;
@@ -189,7 +196,7 @@ export class V2SettlementGenerator {
     const depth = lerp(8, 13, hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 101)));
     const angle = Math.atan2(sample.tangentY, sample.tangentX) + (hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 103)) * 2 - 1) * 0.07;
 
-    return {
+    const house: House = {
       id: `ha-${site.id}`,
       x,
       y,
@@ -198,6 +205,23 @@ export class V2SettlementGenerator {
       angle,
       tone: hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 107))
     };
+    const frontX = house.x - normalX * side * depth * 0.45;
+    const frontY = house.y - normalY * side * depth * 0.45;
+    const driveRoad: RoadSegment = {
+      id: `rda-${site.id}`,
+      className: "drive",
+      width: 1.2,
+      points: [
+        { x: frontX, y: frontY },
+        {
+          x: lerp(frontX, sample.x, 0.56),
+          y: lerp(frontY, sample.y, 0.56)
+        },
+        { x: sample.x, y: sample.y }
+      ]
+    };
+
+    return { house, driveRoad };
   }
 
   private growHousesAlongRoad(
@@ -220,7 +244,7 @@ export class V2SettlementGenerator {
         const jitter = hashToUnit(hashCoords(localHash, 2, 3, 139));
         const normalX = -sample.tangentY;
         const normalY = sample.tangentX;
-        const offset = road.width * 0.5 + lerp(12, 22, jitter);
+        const offset = road.width * 0.5 + lerp(14, 24, jitter);
         const x = sample.x + normalX * side * offset;
         const y = sample.y + normalY * side * offset;
         const slope = this.terrain.slopeAt(x, y);
@@ -252,6 +276,10 @@ export class V2SettlementGenerator {
           angle,
           tone: hashToUnit(hashCoords(localHash, 31, 37, 167))
         };
+        const roadClearance = Math.max(8, Math.max(width, depth) * 0.88);
+        if (this.distanceToRoadsExcludingRoad(x, y, roads, road.id) < roadClearance) {
+          continue;
+        }
         if (!this.canPlaceHouse(house, houses)) {
           continue;
         }
@@ -295,7 +323,10 @@ export class V2SettlementGenerator {
       const baseAngle = Math.atan2(sample.tangentY, sample.tangentX) + angleOffset;
       const length = lerp(72, 156, hashToUnit(hashCoords(localHash, 19, 23, 211)));
       const branch = this.createDirectionalRoad(`rb-${site.id}-${i}`, "branch", 1.95, sample.x, sample.y, baseAngle, length, localHash);
-      if (!this.isRoadUsable(branch.points, roads, 5.8)) {
+      if (!this.isRoadUsable(branch.points, roads, 6.8)) {
+        continue;
+      }
+      if (this.isRoadNearHouses(branch.points, houses, 9)) {
         continue;
       }
 
@@ -305,7 +336,7 @@ export class V2SettlementGenerator {
     }
   }
 
-  private addShortcuts(site: VillageSite, roads: RoadSegment[]): void {
+  private addShortcuts(site: VillageSite, roads: RoadSegment[], houses: House[]): void {
     const branchEnds = roads
       .filter((road) => road.className === "branch")
       .map((road) => ({
@@ -347,7 +378,10 @@ export class V2SettlementGenerator {
           width: 1.25,
           points: [a.end, mid, b.end]
         };
-        if (!this.isRoadUsable(shortcut.points, roads, 4.6)) {
+        if (!this.isRoadUsable(shortcut.points, roads, 6.2)) {
+          continue;
+        }
+        if (this.isRoadNearHouses(shortcut.points, houses, 8)) {
           continue;
         }
 
@@ -458,11 +492,28 @@ export class V2SettlementGenerator {
     const houseRadius = Math.hypot(house.width, house.depth) * 0.6;
     for (const other of existing) {
       const otherRadius = Math.hypot(other.width, other.depth) * 0.6;
-      if (Math.hypot(house.x - other.x, house.y - other.y) < houseRadius + otherRadius + 6) {
+      if (Math.hypot(house.x - other.x, house.y - other.y) < houseRadius + otherRadius + 9) {
         return false;
       }
     }
     return true;
+  }
+
+  private distanceToRoadsExcludingRoad(x: number, y: number, roads: RoadSegment[], roadId: string): number {
+    const filtered = roads.filter((road) => road.id !== roadId);
+    return this.distanceToRoads(x, y, filtered);
+  }
+
+  private isRoadNearHouses(points: Point[], houses: House[], clearance: number): boolean {
+    for (const point of points) {
+      for (const house of houses) {
+        const houseRadius = Math.hypot(house.width, house.depth) * 0.58;
+        if (Math.hypot(point.x - house.x, point.y - house.y) < houseRadius + clearance) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private distanceToRoads(x: number, y: number, roads: RoadSegment[]): number {

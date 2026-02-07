@@ -11,7 +11,8 @@ const run = (): void => {
   const params = new URLSearchParams(window.location.search);
   const seed = params.get("seed") ?? "v2-seed-001";
   const stage = Number(params.get("stage") ?? "2");
-  const app = new V2App(canvas, hud, seed, Number.isFinite(stage) ? stage : 2);
+  const zoom = Number(params.get("zoom") ?? "1.45");
+  const app = new V2App(canvas, hud, seed, Number.isFinite(stage) ? stage : 2, Number.isFinite(zoom) ? zoom : 1.45);
   app.start();
 };
 
