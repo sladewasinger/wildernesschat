@@ -7,6 +7,15 @@ type SideNode = {
   point: Point;
   tangentX: number;
   tangentY: number;
+  houseFrontPoint?: Point;
+};
+
+type RoadBuildOptions = {
+  allowShortSpan?: boolean;
+};
+
+type DrivewayNodeOptions = {
+  preferShort?: boolean;
 };
 
 export type RoadAttachment = {
@@ -17,8 +26,10 @@ export type RoadAttachment = {
   distance: number;
 };
 
-export const createManualHouseAt = (id: string, x: number, y: number, terrain: V2TerrainSampler): House => {
-  const facing = closestContourFacingDirectionAt(terrain, x, y, 18);
+export const createManualHouseAt = (id: string, x: number, y: number, terrain: V2TerrainSampler, roads: RoadSegment[] = []): House => {
+  const contourFacing = closestContourFacingDirectionAt(terrain, x, y, 18);
+  const roadFacing = closestRoadFacingDirectionAt(x, y, roads, 108);
+  const facing = roadFacing ?? contourFacing;
   return {
     id,
     x,
@@ -35,18 +46,32 @@ export const findClosestRoadAttachmentForHouse = (
   roads: RoadSegment[],
   maxDistance: number
 ): RoadAttachment | null => {
+  const candidates = findRoadAttachmentCandidatesForHouse(house, roads, maxDistance, 1);
+  return candidates[0] ?? null;
+};
+
+export const findRoadAttachmentCandidatesForHouse = (
+  house: House,
+  roads: RoadSegment[],
+  maxDistance: number,
+  maxCount = 12
+): RoadAttachment[] => {
   if (roads.length === 0 || maxDistance <= 0) {
-    return null;
+    return [];
   }
-  const start = frontRoadNode(house);
-  let best: RoadAttachment | null = null;
+  const start = houseFrontPoint(house);
+  const candidates: RoadAttachment[] = [];
   const maxDistanceSq = maxDistance * maxDistance;
 
   for (const road of roads) {
     if (road.points.length < 2) {
       continue;
     }
+    const hasDriveStems = road.points.length >= 6;
     for (let i = 1; i < road.points.length; i += 1) {
+      if (hasDriveStems && (i <= 2 || i >= road.points.length - 2)) {
+        continue;
+      }
       const a = road.points[i - 1];
       const b = road.points[i];
       const segX = b.x - a.x;
@@ -56,11 +81,11 @@ export const findClosestRoadAttachmentForHouse = (
         continue;
       }
 
-      const t = clamp(((start.point.x - a.x) * segX + (start.point.y - a.y) * segY) / segLenSq, 0, 1);
+      const t = clamp(((start.x - a.x) * segX + (start.y - a.y) * segY) / segLenSq, 0, 1);
       const qx = a.x + segX * t;
       const qy = a.y + segY * t;
-      const dx = qx - start.point.x;
-      const dy = qy - start.point.y;
+      const dx = qx - start.x;
+      const dy = qy - start.y;
       const distSq = dx * dx + dy * dy;
       if (distSq > maxDistanceSq) {
         continue;
@@ -69,26 +94,39 @@ export const findClosestRoadAttachmentForHouse = (
       const segLen = Math.sqrt(segLenSq);
       const baseTanX = segX / segLen;
       const baseTanY = segY / segLen;
-      const towardAttachX = qx - start.point.x;
-      const towardAttachY = qy - start.point.y;
+      const towardAttachX = qx - start.x;
+      const towardAttachY = qy - start.y;
       const dot = baseTanX * towardAttachX + baseTanY * towardAttachY;
       const tangentX = dot > 0 ? -baseTanX : baseTanX;
       const tangentY = dot > 0 ? -baseTanY : baseTanY;
       const distance = Math.sqrt(distSq);
-
-      if (!best || distance < best.distance) {
-        best = {
-          roadId: road.id,
-          point: { x: qx, y: qy },
-          tangentX,
-          tangentY,
-          distance
-        };
-      }
+      candidates.push({
+        roadId: road.id,
+        point: { x: qx, y: qy },
+        tangentX,
+        tangentY,
+        distance
+      });
     }
   }
 
-  return best;
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  candidates.sort((a, b) => a.distance - b.distance);
+  const chosen: RoadAttachment[] = [];
+  for (const candidate of candidates) {
+    if (chosen.length >= maxCount) {
+      break;
+    }
+    const tooClose = chosen.some((existing) => Math.hypot(existing.point.x - candidate.point.x, existing.point.y - candidate.point.y) < 2.5);
+    if (tooClose) {
+      continue;
+    }
+    chosen.push(candidate);
+  }
+  return chosen;
 };
 
 export const createManualRoadBetweenHouses = (
@@ -97,8 +135,24 @@ export const createManualRoadBetweenHouses = (
   toHouse: House,
   terrain: V2TerrainSampler
 ): RoadSegment | null => {
-  const start = frontRoadNode(fromHouse);
-  const end = frontRoadNode(toHouse);
+  const startBase = drivewayEndNode(fromHouse, houseFrontPoint(toHouse), { preferShort: true });
+  const endBase = drivewayEndNode(toHouse, houseFrontPoint(fromHouse), { preferShort: true });
+  const spanDir = normalizeDirection(endBase.point.x - startBase.point.x, endBase.point.y - startBase.point.y);
+  if (!spanDir) {
+    return createManualRoadBetweenNodes(id, startBase, endBase, terrain);
+  }
+  const startTangent = blendDirections(startBase.tangentX, startBase.tangentY, spanDir.x, spanDir.y, 0.38);
+  const endTangent = blendDirections(endBase.tangentX, endBase.tangentY, -spanDir.x, -spanDir.y, 0.38);
+  const start: SideNode = {
+    ...startBase,
+    tangentX: startTangent.x,
+    tangentY: startTangent.y
+  };
+  const end: SideNode = {
+    ...endBase,
+    tangentX: endTangent.x,
+    tangentY: endTangent.y
+  };
   return createManualRoadBetweenNodes(id, start, end, terrain);
 };
 
@@ -108,29 +162,228 @@ export const createManualRoadToAttachment = (
   attachment: RoadAttachment,
   terrain: V2TerrainSampler
 ): RoadSegment | null => {
-  const start = frontRoadNode(house);
+  const front = houseFrontPoint(house);
+  const directDistance = Math.hypot(attachment.point.x - front.x, attachment.point.y - front.y);
+  const directThreshold = Math.max(12, house.depth * 1.25 + V2_SETTLEMENT_CONFIG.roads.width * 1.2);
+  if (directDistance <= directThreshold) {
+    const points = dedupeRoadPoints([front, attachment.point]);
+    if (points.length >= 2) {
+      return {
+        id,
+        className: "trunk",
+        width: V2_SETTLEMENT_CONFIG.roads.width,
+        points
+      };
+    }
+    return null;
+  }
+
+  const start = drivewayEndNode(house, attachment.point);
+  const towardAttach = normalizeDirection(attachment.point.x - start.point.x, attachment.point.y - start.point.y);
+  const startTangent = towardAttach
+    ? blendDirections(start.tangentX, start.tangentY, towardAttach.x, towardAttach.y, 0.68)
+    : { x: start.tangentX, y: start.tangentY };
   const end: SideNode = {
     point: attachment.point,
     tangentX: attachment.tangentX,
     tangentY: attachment.tangentY
   };
-  return createManualRoadBetweenNodes(id, start, end, terrain);
+  return createManualRoadBetweenNodes(
+    id,
+    {
+      ...start,
+      tangentX: startTangent.x,
+      tangentY: startTangent.y
+    },
+    end,
+    terrain,
+    { allowShortSpan: true }
+  );
 };
 
-const createManualRoadBetweenNodes = (id: string, start: SideNode, end: SideNode, terrain: V2TerrainSampler): RoadSegment | null => {
-  const span = Math.hypot(end.point.x - start.point.x, end.point.y - start.point.y);
-  if (span < 18) {
+export const findBridgeAttachmentForHouse = (
+  house: House,
+  roads: RoadSegment[],
+  primary: RoadAttachment,
+  maxDistance: number
+): RoadAttachment | null => {
+  if (roads.length === 0 || maxDistance <= 0) {
+    return null;
+  }
+  const start = houseFrontPoint(house);
+  const primaryDir = normalizeDirection(primary.point.x - start.x, primary.point.y - start.y);
+  if (!primaryDir) {
     return null;
   }
 
+  let best: RoadAttachment | null = null;
+  const maxDistanceSq = maxDistance * maxDistance;
+
+  for (const road of roads) {
+    if (road.points.length < 2) {
+      continue;
+    }
+    const hasDriveStems = road.points.length >= 6;
+    for (let i = 1; i < road.points.length; i += 1) {
+      if (hasDriveStems && (i <= 2 || i >= road.points.length - 2)) {
+        continue;
+      }
+
+      const a = road.points[i - 1];
+      const b = road.points[i];
+      const segX = b.x - a.x;
+      const segY = b.y - a.y;
+      const segLenSq = segX * segX + segY * segY;
+      if (segLenSq <= 1e-6) {
+        continue;
+      }
+
+      const t = clamp(((start.x - a.x) * segX + (start.y - a.y) * segY) / segLenSq, 0, 1);
+      const qx = a.x + segX * t;
+      const qy = a.y + segY * t;
+      const dx = qx - start.x;
+      const dy = qy - start.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq > maxDistanceSq) {
+        continue;
+      }
+      if (Math.hypot(qx - primary.point.x, qy - primary.point.y) < 9) {
+        continue;
+      }
+
+      const candidateDir = normalizeDirection(dx, dy);
+      if (!candidateDir) {
+        continue;
+      }
+      const opposite = primaryDir.x * candidateDir.x + primaryDir.y * candidateDir.y;
+      if (opposite > -0.18) {
+        continue;
+      }
+
+      const segLen = Math.sqrt(segLenSq);
+      const baseTanX = segX / segLen;
+      const baseTanY = segY / segLen;
+      const dot = baseTanX * dx + baseTanY * dy;
+      const tangentX = dot > 0 ? -baseTanX : baseTanX;
+      const tangentY = dot > 0 ? -baseTanY : baseTanY;
+      const distance = Math.sqrt(distSq);
+      const sameRoadPenalty = road.id === primary.roadId ? 0 : 18;
+      const score = distance + (opposite + 1) * 24 + sameRoadPenalty;
+
+      if (!best || score < best.distance) {
+        best = {
+          roadId: road.id,
+          point: { x: qx, y: qy },
+          tangentX,
+          tangentY,
+          distance: score
+        };
+      }
+    }
+  }
+
+  if (!best) {
+    return null;
+  }
+
+  return {
+    ...best,
+    distance: Math.hypot(best.point.x - start.x, best.point.y - start.y)
+  };
+};
+
+export const createManualBridgeRoadBetweenAttachments = (
+  id: string,
+  a: RoadAttachment,
+  b: RoadAttachment,
+  terrain: V2TerrainSampler
+): RoadSegment | null => {
+  const ab = normalizeDirection(b.point.x - a.point.x, b.point.y - a.point.y);
+  if (!ab) {
+    return null;
+  }
+  const fromTangent = blendDirections(a.tangentX, a.tangentY, ab.x, ab.y, 0.65);
+  const toTangent = blendDirections(b.tangentX, b.tangentY, -ab.x, -ab.y, 0.65);
+
+  const fromNode: SideNode = {
+    point: a.point,
+    tangentX: fromTangent.x,
+    tangentY: fromTangent.y
+  };
+  const toNode: SideNode = {
+    point: b.point,
+    tangentX: toTangent.x,
+    tangentY: toTangent.y
+  };
+
+  return createManualRoadBetweenNodes(id, fromNode, toNode, terrain);
+};
+
+const createManualRoadBetweenNodes = (
+  id: string,
+  start: SideNode,
+  end: SideNode,
+  terrain: V2TerrainSampler,
+  options: RoadBuildOptions = {}
+): RoadSegment | null => {
+  return buildRoadBetweenNodes(id, start, end, terrain, options);
+};
+
+const buildRoadBetweenNodes = (
+  id: string,
+  start: SideNode,
+  end: SideNode,
+  terrain: V2TerrainSampler,
+  options: RoadBuildOptions = {}
+): RoadSegment | null => {
+  const span = Math.hypot(end.point.x - start.point.x, end.point.y - start.point.y);
+  const minSpan = options.allowShortSpan ? 1.6 : 18;
+  if (span < minSpan) {
+    return null;
+  }
+
+  const startAnchor = start.houseFrontPoint ?? start.point;
+  const endAnchor = end.houseFrontPoint ?? end.point;
+  if (options.allowShortSpan && span < 16) {
+    return {
+      id,
+      className: "trunk",
+      width: V2_SETTLEMENT_CONFIG.roads.width,
+      points: smoothRoadPath([startAnchor, start.point, end.point, endAnchor])
+    };
+  }
+
+  if (span < 58) {
+    const shortCurve = buildTangentBezierCurve(start, end, span);
+    if (shortCurve.length >= 2) {
+      return {
+        id,
+        className: "trunk",
+        width: V2_SETTLEMENT_CONFIG.roads.width,
+        points: smoothRoadPath([startAnchor, ...shortCurve, endAnchor])
+      };
+    }
+  }
+
   const leadLen = clamp(span * 0.11, 8, 24);
+  const spanDir = normalizeDirection(end.point.x - start.point.x, end.point.y - start.point.y);
+  const startToward = spanDir
+    ? clamp(start.tangentX * spanDir.x + start.tangentY * spanDir.y, -1, 1)
+    : 1;
+  const endToward = spanDir
+    ? clamp(end.tangentX * -spanDir.x + end.tangentY * -spanDir.y, -1, 1)
+    : 1;
+  const startTurn = (1 - startToward) * 0.5;
+  const endTurn = (1 - endToward) * 0.5;
+  const startLeadLen = clamp(leadLen * lerp(0.82, 1.38, startTurn), 6, 34);
+  const endLeadLen = clamp(leadLen * lerp(0.82, 1.38, endTurn), 6, 34);
   const startLead = {
-    x: start.point.x + start.tangentX * leadLen,
-    y: start.point.y + start.tangentY * leadLen
+    x: start.point.x + start.tangentX * startLeadLen,
+    y: start.point.y + start.tangentY * startLeadLen
   };
   const endLead = {
-    x: end.point.x + end.tangentX * leadLen,
-    y: end.point.y + end.tangentY * leadLen
+    x: end.point.x + end.tangentX * endLeadLen,
+    y: end.point.y + end.tangentY * endLeadLen
   };
   const corridor = buildContourSpline(startLead, endLead, terrain);
   if (!corridor) {
@@ -141,22 +394,115 @@ const createManualRoadBetweenNodes = (id: string, start: SideNode, end: SideNode
     id,
     className: "trunk",
     width: V2_SETTLEMENT_CONFIG.roads.width,
-    points: dedupeRoadPoints([start.point, startLead, ...corridor, endLead, end.point])
+    points: smoothRoadPath([startAnchor, start.point, startLead, ...corridor, endLead, end.point, endAnchor])
   };
 };
 
-const frontRoadNode = (house: House): SideNode => {
+const buildTangentBezierCurve = (start: SideNode, end: SideNode, span: number): Point[] => {
+  const controlLen = clamp(span * 0.44, 5, 24);
+  const p0 = start.point;
+  const p1 = {
+    x: p0.x + start.tangentX * controlLen,
+    y: p0.y + start.tangentY * controlLen
+  };
+  const p3 = end.point;
+  const p2 = {
+    x: p3.x + end.tangentX * controlLen,
+    y: p3.y + end.tangentY * controlLen
+  };
+  const stepCount = clamp(Math.round(span / 2.6), 7, 18);
+  const points: Point[] = [];
+  for (let i = 0; i <= stepCount; i += 1) {
+    const t = i / stepCount;
+    const omt = 1 - t;
+    const x = omt * omt * omt * p0.x + 3 * omt * omt * t * p1.x + 3 * omt * t * t * p2.x + t * t * t * p3.x;
+    const y = omt * omt * omt * p0.y + 3 * omt * omt * t * p1.y + 3 * omt * t * t * p2.y + t * t * t * p3.y;
+    points.push({ x, y });
+  }
+  return dedupeRoadPoints(points);
+};
+
+const closestRoadFacingDirectionAt = (x: number, y: number, roads: RoadSegment[], maxDistance: number): Point | null => {
+  if (roads.length === 0 || maxDistance <= 0) {
+    return null;
+  }
+
+  const maxDistanceSq = maxDistance * maxDistance;
+  let bestDirection: Point | null = null;
+  let bestDistSq = Number.POSITIVE_INFINITY;
+
+  for (const road of roads) {
+    if (road.points.length < 2) {
+      continue;
+    }
+    const hasDriveStems = road.points.length >= 6;
+    for (let i = 1; i < road.points.length; i += 1) {
+      if (hasDriveStems && (i <= 2 || i >= road.points.length - 2)) {
+        continue;
+      }
+      const a = road.points[i - 1];
+      const b = road.points[i];
+      const segX = b.x - a.x;
+      const segY = b.y - a.y;
+      const segLenSq = segX * segX + segY * segY;
+      if (segLenSq <= 1e-6) {
+        continue;
+      }
+      const t = clamp(((x - a.x) * segX + (y - a.y) * segY) / segLenSq, 0, 1);
+      const qx = a.x + segX * t;
+      const qy = a.y + segY * t;
+      const dx = qx - x;
+      const dy = qy - y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq > maxDistanceSq || distSq >= bestDistSq) {
+        continue;
+      }
+      const towardsRoad = normalizeDirection(dx, dy);
+      if (!towardsRoad) {
+        continue;
+      }
+      bestDirection = towardsRoad;
+      bestDistSq = distSq;
+    }
+  }
+
+  return bestDirection;
+};
+
+const houseFrontPoint = (house: House): Point => {
   const forwardX = Math.cos(house.angle);
   const forwardY = Math.sin(house.angle);
-  const frontOffset = house.width * 0.56 + 9;
+  const frontOffset = house.width * 0.5 - V2_SETTLEMENT_CONFIG.roads.width * 0.24;
+  return {
+    x: house.x + forwardX * frontOffset,
+    y: house.y + forwardY * frontOffset
+  };
+};
+
+const drivewayEndNode = (house: House, targetPoint?: Point, options: DrivewayNodeOptions = {}): SideNode => {
+  const forwardX = Math.cos(house.angle);
+  const forwardY = Math.sin(house.angle);
+  const defaultDrivewayLength = Math.max(8, house.depth * 0.88 + V2_SETTLEMENT_CONFIG.roads.width * 1.4);
+  const minDrivewayLength = Math.max(1.5, V2_SETTLEMENT_CONFIG.roads.width * 0.44);
+  const front = houseFrontPoint(house);
+  let drivewayLength = defaultDrivewayLength;
+  if (targetPoint) {
+    const toTargetX = targetPoint.x - front.x;
+    const toTargetY = targetPoint.y - front.y;
+    const forwardDistance = toTargetX * forwardX + toTargetY * forwardY;
+    const desired = forwardDistance - V2_SETTLEMENT_CONFIG.roads.width * 0.38;
+    const maxLength = options.preferShort ? Math.max(3.8, defaultDrivewayLength * 0.66) : defaultDrivewayLength;
+    drivewayLength = clamp(desired, minDrivewayLength, maxLength);
+  }
 
   return {
     point: {
-      x: house.x + forwardX * frontOffset,
-      y: house.y + forwardY * frontOffset
+      x: front.x + forwardX * drivewayLength,
+      y: front.y + forwardY * drivewayLength
     },
     tangentX: forwardX,
-    tangentY: forwardY
+    tangentY: forwardY,
+    houseFrontPoint: front
   };
 };
 
@@ -302,6 +648,23 @@ const contourDirectionAt = (terrain: V2TerrainSampler, x: number, y: number, ste
   return { x: contourX / len, y: contourY / len };
 };
 
+const normalizeDirection = (x: number, y: number): Point | null => {
+  const len = Math.hypot(x, y);
+  if (len <= 1e-6) {
+    return null;
+  }
+  return { x: x / len, y: y / len };
+};
+
+const blendDirections = (ax: number, ay: number, bx: number, by: number, bWeight: number): Point => {
+  const aWeight = 1 - bWeight;
+  const mixed = normalizeDirection(ax * aWeight + bx * bWeight, ay * aWeight + by * bWeight);
+  if (mixed) {
+    return mixed;
+  }
+  return normalizeDirection(ax, ay) ?? { x: 1, y: 0 };
+};
+
 const chaikinSmooth = (points: Point[], passes: number): Point[] => {
   let current = points;
   for (let pass = 0; pass < passes; pass += 1) {
@@ -345,4 +708,13 @@ const dedupeRoadPoints = (points: Point[]): Point[] => {
     deduped.push(next);
   }
   return deduped;
+};
+
+const smoothRoadPath = (points: Point[]): Point[] => {
+  const deduped = dedupeRoadPoints(points);
+  if (deduped.length < 3) {
+    return deduped;
+  }
+  const passes = deduped.length >= 6 ? 2 : 1;
+  return dedupeRoadPoints(chaikinSmooth(deduped, passes));
 };

@@ -1,9 +1,12 @@
 import { clamp, floorDiv, lerp } from "../util/math";
 import { V2SettlementGenerator } from "./generator";
 import {
+  createManualBridgeRoadBetweenAttachments,
   createManualHouseAt,
   createManualRoadBetweenHouses,
   createManualRoadToAttachment,
+  findBridgeAttachmentForHouse,
+  findRoadAttachmentCandidatesForHouse,
   findClosestRoadAttachmentForHouse
 } from "./generator/manual-placement";
 import { V2TerrainSampler } from "./terrain";
@@ -15,6 +18,18 @@ type InputState = {
   down: boolean;
   left: boolean;
   right: boolean;
+};
+
+type ManualConnectionMode = "none" | "seed-road" | "attach-road" | "bridge-road";
+
+type ManualPreview = {
+  house: House | null;
+  road: RoadSegment | null;
+  secondaryRoad: RoadSegment | null;
+  mode: ManualConnectionMode;
+  attachPoint: Point | null;
+  secondaryAttachPoint: Point | null;
+  searchRadius: number;
 };
 
 const STAGE_LABELS = [
@@ -168,10 +183,14 @@ export class V2App {
     }
     const newHouse = { ...preview.house, id: `mh-${this.manualHouses.length}` };
     const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
-    this.manualHouses.push(newHouse);
-    const road = this.buildManualConnectionRoad(newHouse, previous, `mr-${this.manualRoads.length}`);
-    if (road) {
-      this.manualRoads.push(road);
+    const connection = this.buildManualConnectionRoad(newHouse, previous, `mr-${this.manualRoads.length}`);
+    const placedHouse = connection.house ? { ...connection.house, id: newHouse.id } : newHouse;
+    this.manualHouses.push(placedHouse);
+    if (connection.secondaryRoad) {
+      this.manualRoads.push(connection.secondaryRoad);
+    }
+    if (connection.road) {
+      this.manualRoads.push(connection.road);
     }
   };
 
@@ -221,10 +240,14 @@ export class V2App {
       if (preview.road) {
         this.drawRoads([preview.road], viewMinX, viewMinY, 0.48);
       }
+      if (preview.secondaryRoad) {
+        this.drawRoads([preview.secondaryRoad], viewMinX, viewMinY, 0.38);
+      }
       this.drawHouses(this.manualHouses, viewMinX, viewMinY);
       if (preview.house) {
         this.drawHouses([preview.house], viewMinX, viewMinY, 0.5);
       }
+      this.drawManualPreviewCue(preview, viewMinX, viewMinY);
       this.drawPlayerMarker(halfW, halfH);
 
       const terrain = this.terrain.elevationAt(this.playerX, this.playerY);
@@ -251,6 +274,11 @@ export class V2App {
         `Contour grid: ${this.currentTerrainWorldStep.toFixed(1)} world units`,
         `Manual houses: ${this.manualHouses.length}`,
         `Manual roads: ${this.manualRoads.length}`,
+        `Preview connection: ${preview.mode}`,
+        preview.searchRadius > 0
+          ? `Preview search radius: ${Number.isFinite(preview.searchRadius) ? preview.searchRadius.toFixed(1) : "global"}`
+          : "Preview search radius: n/a",
+        `Preview bridge mode: ${preview.mode === "bridge-road" ? "yes" : "no"}`,
         hover && hoverElev !== null && hoverSlope !== null
           ? `Hover: x=${hover.x.toFixed(1)} y=${hover.y.toFixed(1)} elev=${hoverElev.toFixed(3)} slope=${hoverSlope.toFixed(3)}`
           : "Hover: (move cursor over canvas)"
@@ -323,31 +351,268 @@ export class V2App {
     ].join("\n");
   }
 
-  private currentManualPreview(): { house: House | null; road: RoadSegment | null } {
+  private currentManualPreview(): ManualPreview {
     if (!this.pointerInsideCanvas) {
-      return { house: null, road: null };
+      return {
+        house: null,
+        road: null,
+        secondaryRoad: null,
+        mode: "none",
+        attachPoint: null,
+        secondaryAttachPoint: null,
+        searchRadius: 0
+      };
     }
 
     const hover = this.screenToWorld(this.mouseCanvasX, this.mouseCanvasY);
-    const house = createManualHouseAt("preview", hover.x, hover.y, this.terrain);
+    const baseHouse = createManualHouseAt("preview", hover.x, hover.y, this.terrain, this.manualRoads);
     const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
-    const road = this.buildManualConnectionRoad(house, previous, "preview-road");
-    return { house, road };
+    const connection = this.buildManualConnectionRoad(baseHouse, previous, "preview-road");
+    return {
+      house: connection.house ?? baseHouse,
+      road: connection.road,
+      secondaryRoad: connection.secondaryRoad,
+      mode: connection.mode,
+      attachPoint: connection.attachPoint,
+      secondaryAttachPoint: connection.secondaryAttachPoint,
+      searchRadius: connection.searchRadius
+    };
   }
 
-  private buildManualConnectionRoad(house: House, previous: House | null, id: string): RoadSegment | null {
-    const attach = findClosestRoadAttachmentForHouse(house, this.manualRoads, 138);
-    if (attach) {
-      const road = createManualRoadToAttachment(id, house, attach, this.terrain);
-      if (road) {
-        return road;
+  private buildManualConnectionRoad(
+    house: House,
+    previous: House | null,
+    id: string
+  ): {
+    house: House | null;
+    road: RoadSegment | null;
+    secondaryRoad: RoadSegment | null;
+    mode: ManualConnectionMode;
+    attachPoint: Point | null;
+    secondaryAttachPoint: Point | null;
+    searchRadius: number;
+  } {
+    const hasExistingRoads = this.manualRoads.length > 0;
+    const searchRadius = hasExistingRoads ? Number.POSITIVE_INFINITY : previous ? Math.max(24, Math.hypot(previous.x - house.x, previous.y - house.y)) : 0;
+    const attachCandidates = hasExistingRoads ? findRoadAttachmentCandidatesForHouse(house, this.manualRoads, searchRadius, 14) : [];
+    if (attachCandidates.length > 0) {
+      for (const attach of attachCandidates) {
+        const bridgeAttach = findBridgeAttachmentForHouse(house, this.manualRoads, attach, Math.max(searchRadius + 18, searchRadius * 1.22));
+        if (bridgeAttach) {
+          const bridgeRoad = createManualBridgeRoadBetweenAttachments(`${id}-bridge`, attach, bridgeAttach, this.terrain);
+          if (bridgeRoad && !this.roadIntersectsHouses(bridgeRoad, this.manualHouses, new Set())) {
+            const orientedHouse = this.orientHouseTowardRoad(house, bridgeRoad);
+            const drivewayAttach = findClosestRoadAttachmentForHouse(
+              orientedHouse,
+              [bridgeRoad],
+              Math.max(36, Math.min(196, searchRadius * 0.95 + 24))
+            );
+            if (drivewayAttach) {
+              const drivewayRoad = createManualRoadToAttachment(id, orientedHouse, drivewayAttach, this.terrain);
+              if (drivewayRoad && !this.roadIntersectsHouses(drivewayRoad, this.manualHouses, new Set([orientedHouse.id]))) {
+                return {
+                  house: orientedHouse,
+                  road: drivewayRoad,
+                  secondaryRoad: bridgeRoad,
+                  mode: "bridge-road",
+                  attachPoint: drivewayAttach.point,
+                  secondaryAttachPoint: bridgeAttach.point,
+                  searchRadius
+                };
+              }
+            }
+          }
+        }
+
+        const road = createManualRoadToAttachment(id, house, attach, this.terrain);
+        if (road && !this.roadIntersectsHouses(road, this.manualHouses, new Set([house.id]))) {
+          return {
+            house,
+            road,
+            secondaryRoad: null,
+            mode: "attach-road",
+            attachPoint: attach.point,
+            secondaryAttachPoint: null,
+            searchRadius
+          };
+        }
       }
+
+      const bestAttach = attachCandidates[0];
+      return {
+        house,
+        road: null,
+        secondaryRoad: null,
+        mode: "attach-road",
+        attachPoint: bestAttach.point,
+        secondaryAttachPoint: null,
+        searchRadius
+      };
     }
 
     if (!previous) {
+      return {
+        house,
+        road: null,
+        secondaryRoad: null,
+        mode: "none",
+        attachPoint: null,
+        secondaryAttachPoint: null,
+        searchRadius
+      };
+    }
+    if (hasExistingRoads) {
+      return {
+        house,
+        road: null,
+        secondaryRoad: null,
+        mode: "none",
+        attachPoint: null,
+        secondaryAttachPoint: null,
+        searchRadius
+      };
+    }
+
+    const seedRoad = createManualRoadBetweenHouses(id, previous, house, this.terrain);
+    const usableRoad =
+      seedRoad && !this.roadIntersectsHouses(seedRoad, this.manualHouses, new Set([house.id, previous.id])) ? seedRoad : null;
+    return {
+      house,
+      road: usableRoad,
+      secondaryRoad: null,
+      mode: usableRoad ? "seed-road" : "none",
+      attachPoint: null,
+      secondaryAttachPoint: null,
+      searchRadius
+    };
+  }
+
+  private orientHouseTowardRoad(house: House, road: RoadSegment): House {
+    const target = this.closestPointOnRoad(house.x, house.y, road);
+    if (!target) {
+      return house;
+    }
+    const dx = target.x - house.x;
+    const dy = target.y - house.y;
+    if (Math.hypot(dx, dy) <= 1e-6) {
+      return house;
+    }
+    return {
+      ...house,
+      angle: Math.atan2(dy, dx)
+    };
+  }
+
+  private closestPointOnRoad(x: number, y: number, road: RoadSegment): Point | null {
+    if (road.points.length < 2) {
       return null;
     }
-    return createManualRoadBetweenHouses(id, previous, house, this.terrain);
+
+    let best: Point | null = null;
+    let bestDistSq = Number.POSITIVE_INFINITY;
+
+    for (let i = 1; i < road.points.length; i += 1) {
+      const a = road.points[i - 1];
+      const b = road.points[i];
+      const vx = b.x - a.x;
+      const vy = b.y - a.y;
+      const lenSq = vx * vx + vy * vy;
+      if (lenSq <= 1e-6) {
+        continue;
+      }
+      const t = clamp(((x - a.x) * vx + (y - a.y) * vy) / lenSq, 0, 1);
+      const qx = a.x + vx * t;
+      const qy = a.y + vy * t;
+      const dx = qx - x;
+      const dy = qy - y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        best = { x: qx, y: qy };
+      }
+    }
+
+    return best;
+  }
+
+  private roadIntersectsHouses(road: RoadSegment, houses: House[], allowedHouseIds: Set<string>): boolean {
+    if (road.points.length < 2) {
+      return false;
+    }
+
+    for (const house of houses) {
+      if (allowedHouseIds.has(house.id)) {
+        continue;
+      }
+      const houseRadius = Math.hypot(house.width, house.depth) * 0.47;
+      const clearance = houseRadius + V2_SETTLEMENT_CONFIG.roads.width * 0.42;
+      for (let i = 1; i < road.points.length; i += 1) {
+        const a = road.points[i - 1];
+        const b = road.points[i];
+        if (this.distancePointToSegment(house.x, house.y, a.x, a.y, b.x, b.y) < clearance) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private distancePointToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+    const vx = bx - ax;
+    const vy = by - ay;
+    const lenSq = vx * vx + vy * vy;
+    if (lenSq <= 1e-6) {
+      return Math.hypot(px - ax, py - ay);
+    }
+    const t = clamp(((px - ax) * vx + (py - ay) * vy) / lenSq, 0, 1);
+    const qx = ax + vx * t;
+    const qy = ay + vy * t;
+    return Math.hypot(px - qx, py - qy);
+  }
+
+  private drawManualPreviewCue(preview: ManualPreview, viewMinX: number, viewMinY: number): void {
+    if (!preview.house) {
+      return;
+    }
+
+    const houseX = (preview.house.x - viewMinX) * this.zoom;
+    const houseY = (preview.house.y - viewMinY) * this.zoom;
+    const cueX = houseX + Math.max(6, 9 * this.zoom);
+    const cueY = houseY - Math.max(6, 9 * this.zoom);
+    const cueColor =
+      preview.mode === "attach-road"
+        ? "rgba(89, 224, 255, 0.96)"
+        : preview.mode === "bridge-road"
+          ? "rgba(116, 235, 140, 0.96)"
+          : preview.mode === "seed-road"
+          ? "rgba(255, 206, 108, 0.95)"
+          : "rgba(188, 198, 208, 0.9)";
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = cueColor;
+    ctx.beginPath();
+    ctx.arc(cueX, cueY, Math.max(1.8, 2.2 * this.zoom), 0, Math.PI * 2);
+    ctx.fill();
+    if ((preview.mode === "attach-road" || preview.mode === "bridge-road") && preview.attachPoint) {
+      const ax = (preview.attachPoint.x - viewMinX) * this.zoom;
+      const ay = (preview.attachPoint.y - viewMinY) * this.zoom;
+      ctx.strokeStyle = cueColor;
+      ctx.lineWidth = Math.max(1, 1.2 * this.zoom);
+      ctx.beginPath();
+      ctx.arc(ax, ay, Math.max(1.5, 1.9 * this.zoom), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (preview.mode === "bridge-road" && preview.secondaryAttachPoint) {
+      const bx = (preview.secondaryAttachPoint.x - viewMinX) * this.zoom;
+      const by = (preview.secondaryAttachPoint.y - viewMinY) * this.zoom;
+      ctx.strokeStyle = cueColor;
+      ctx.lineWidth = Math.max(1, 1.2 * this.zoom);
+      ctx.beginPath();
+      ctx.arc(bx, by, Math.max(1.5, 2.1 * this.zoom), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private screenToWorld(canvasX: number, canvasY: number): Point {

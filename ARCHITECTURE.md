@@ -115,7 +115,7 @@ This project uses deterministic procedural generation with clear module boundari
 - `src/v2/generator/house-first.ts`
   - House-first local village synthesis (anchor house, cluster expansion, and house-connection road graph).
 - `src/v2/generator/manual-placement.ts`
-  - Interactive/manual house placement helpers (downhill-oriented houses and contour-following spline roads for click-to-place validation).
+  - Interactive/manual house placement helpers (road-aware/contour-aware house orientation and contour-following spline roads for click-to-place validation).
 - `src/v2/generator/branching.ts`
   - Legacy Stage 3 branch synthesis module from trunk-first track (kept for reference).
 - `src/v2/generator/stage3-profile.ts`
