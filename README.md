@@ -25,7 +25,7 @@ Open `http://localhost:5173`.
 Parallel sandbox prototype:
 
 - `http://localhost:5173/v2.html`
-- Optional params: `seed`, `stage` (`0..3`), `zoom` (`0.65..2.8`)
+- Optional params: `seed`, `stage` (`0..4`), `zoom` (`0.65..2.8`)
 
 ## Query Params
 
@@ -49,7 +49,7 @@ Example:
 ## Runtime Controls
 
 - Move: `WASD` / Arrow Keys
-- V2 sandbox stage: `1..4` (or `[` / `]`)
+- V2 sandbox stage: `1..5` (or `[` / `]`)
 - V2 sandbox zoom: `+` / `-` or mouse wheel
 
 ## Current Generator Layers

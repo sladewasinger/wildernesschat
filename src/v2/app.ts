@@ -15,7 +15,8 @@ const STAGE_LABELS = [
   "0 Terrain Only",
   "1 Anchor House + Trunk",
   "2 Iterative House Growth",
-  "3 Y-Branches + Shortcuts"
+  "3 Y-Branches + Shortcuts",
+  "4 Inter-Village Connectors"
 ];
 
 export class V2App {
@@ -75,6 +76,7 @@ export class V2App {
     if (event.key === "2") this.stage = 1;
     if (event.key === "3") this.stage = 2;
     if (event.key === "4") this.stage = 3;
+    if (event.key === "5") this.stage = 4;
     if (event.key === "]") this.stage = clamp(this.stage + 1, V2_STAGE_MIN, V2_STAGE_MAX);
     if (event.key === "[") this.stage = clamp(this.stage - 1, V2_STAGE_MIN, V2_STAGE_MAX);
     if (event.key === "=" || event.key === "+") {
@@ -167,7 +169,7 @@ export class V2App {
     this.hud.textContent = [
       "Village Generator V2 Sandbox",
       "Move: WASD / Arrows",
-      "Stage: 1-4 keys (or [ / ])",
+      "Stage: 1-5 keys (or [ / ])",
       "Zoom: +/- keys or mouse wheel",
       `Current: ${STAGE_LABELS[this.stage]}`,
       `Seed: ${this.seed}`,

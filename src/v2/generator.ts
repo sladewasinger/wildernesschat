@@ -27,6 +27,18 @@ type AnchorPlacement = {
   driveRoad: RoadSegment;
 };
 
+type RoadUsageOptions = {
+  allowLastPointTouch?: boolean;
+};
+
+type ClosestRoadMatch = {
+  roadId: string;
+  point: Point;
+  distance: number;
+  tangentX: number;
+  tangentY: number;
+};
+
 export class V2SettlementGenerator {
   private readonly siteSeed: number;
   private readonly planSeed: number;
@@ -88,8 +100,12 @@ export class V2SettlementGenerator {
     }
 
     if (stageValue >= 3) {
-      this.addBranches(site, trunk, roads, houses);
+      this.addBranches(site, trunk, roads, houses, stageValue >= 4);
       this.addShortcuts(site, roads, houses);
+    }
+
+    if (stageValue >= 4) {
+      this.addInterVillageConnectors(site, trunk, roads, houses);
     }
 
     const plan: VillagePlan = { site, roads, houses };
@@ -305,9 +321,10 @@ export class V2SettlementGenerator {
     }
   }
 
-  private addBranches(site: VillageSite, trunk: RoadSegment, roads: RoadSegment[], houses: House[]): void {
+  private addBranches(site: VillageSite, trunk: RoadSegment, roads: RoadSegment[], houses: House[], allowReuseHeuristic: boolean): void {
     const branchTarget = Math.max(2, Math.round(2 + site.score * 4));
     let added = 0;
+    const anchors: Array<{ t: number; side: -1 | 1; angle: number }> = [];
 
     for (let i = 0; i < branchTarget * 8; i += 1) {
       if (added >= branchTarget) {
@@ -323,6 +340,9 @@ export class V2SettlementGenerator {
       const angleOffset = lerp(0.7, 1.18, hashToUnit(hashCoords(localHash, 13, 17, 199))) * side;
       const baseAngle = Math.atan2(sample.tangentY, sample.tangentX) + angleOffset;
       const length = lerp(82, 176, hashToUnit(hashCoords(localHash, 19, 23, 211)));
+      if (this.hasNearbyBranchAnchor(t, side, baseAngle, anchors)) {
+        continue;
+      }
       const branch = this.createDirectionalRoad(
         `rb-${site.id}-${i}`,
         "branch",
@@ -333,7 +353,14 @@ export class V2SettlementGenerator {
         length,
         localHash
       );
-      if (!this.isRoadUsable(branch.points, roads, 6.2)) {
+      if (allowReuseHeuristic && this.hasRoadReuseOpportunity(branch, roads)) {
+        continue;
+      }
+
+      if (this.hasParallelRoadConflict(branch, roads)) {
+        continue;
+      }
+      if (!this.isRoadUsable(branch.points, roads, V2_SETTLEMENT_CONFIG.branchRoadMinDistance)) {
         continue;
       }
       if (this.isRoadNearHouses(branch.points, houses, V2_SETTLEMENT_CONFIG.branchRoadHouseClearance - 1.5)) {
@@ -341,6 +368,7 @@ export class V2SettlementGenerator {
       }
 
       roads.push(branch);
+      anchors.push({ t, side, angle: baseAngle });
       this.growHousesAlongRoad(site, branch, 7, roads, houses, localHash ^ 0x27d4eb2f, 0.61);
       added += 1;
     }
@@ -351,6 +379,9 @@ export class V2SettlementGenerator {
         const sample = this.sampleRoad(trunk.points, fallbackTs[i]);
         const side: -1 | 1 = i === 0 ? -1 : 1;
         const angle = Math.atan2(sample.tangentY, sample.tangentX) + side * 0.92;
+        if (this.hasNearbyBranchAnchor(fallbackTs[i], side, angle, anchors)) {
+          continue;
+        }
         const hash = hashCoords(this.planSeed, site.cellX, site.cellY, 1201 + i * 13);
         const fallback = this.createDirectionalRoad(
           `rbf-${site.id}-${i}`,
@@ -362,6 +393,12 @@ export class V2SettlementGenerator {
           116,
           hash
         );
+        if (allowReuseHeuristic && this.hasRoadReuseOpportunity(fallback, roads)) {
+          continue;
+        }
+        if (this.hasParallelRoadConflict(fallback, roads)) {
+          continue;
+        }
         if (!this.isRoadUsable(fallback.points, roads, 5.8)) {
           continue;
         }
@@ -369,8 +406,72 @@ export class V2SettlementGenerator {
           continue;
         }
         roads.push(fallback);
+        anchors.push({ t: fallbackTs[i], side, angle });
         this.growHousesAlongRoad(site, fallback, 6, roads, houses, hash ^ 0x27d4eb2f, 0.61);
       }
+    }
+  }
+
+  private addInterVillageConnectors(site: VillageSite, trunk: RoadSegment, roads: RoadSegment[], houses: House[]): void {
+    const neighbors = this.collectNearbySites(site, V2_SETTLEMENT_CONFIG.interVillageMaxDistance);
+    let added = 0;
+
+    for (const neighbor of neighbors) {
+      if (added >= V2_SETTLEMENT_CONFIG.interVillageMaxPerVillage) {
+        break;
+      }
+      if (site.id >= neighbor.id) {
+        continue;
+      }
+
+      const dx = neighbor.x - site.x;
+      const dy = neighbor.y - site.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < V2_SETTLEMENT_CONFIG.interVillageMinDistance || dist > V2_SETTLEMENT_CONFIG.interVillageMaxDistance) {
+        continue;
+      }
+
+      const pairKey = `${site.id}|${neighbor.id}`;
+      const pairHash = hashString(`${pairKey}:connector`);
+      if (hashToUnit(hashCoords(pairHash, 11, 17, 601)) > 0.86) {
+        continue;
+      }
+
+      const localAnchor = this.closestPointOnRoad(trunk, neighbor.x, neighbor.y);
+      const neighborTrunk = this.buildTrunkRoad(neighbor);
+      const remoteAnchor = this.closestPointOnRoad(neighborTrunk, site.x, site.y);
+
+      const span = Math.hypot(remoteAnchor.point.x - localAnchor.point.x, remoteAnchor.point.y - localAnchor.point.y);
+      if (span < V2_SETTLEMENT_CONFIG.interVillageMinDistance * 0.85) {
+        continue;
+      }
+
+      const normalX = -(remoteAnchor.point.y - localAnchor.point.y) / Math.max(1, span);
+      const normalY = (remoteAnchor.point.x - localAnchor.point.x) / Math.max(1, span);
+      const bend = (hashToUnit(hashCoords(pairHash, 23, 29, 607)) * 2 - 1) * Math.min(24, span * 0.16);
+      const mid = {
+        x: (localAnchor.point.x + remoteAnchor.point.x) * 0.5 + normalX * bend,
+        y: (localAnchor.point.y + remoteAnchor.point.y) * 0.5 + normalY * bend
+      };
+      const connector: RoadSegment = {
+        id: `rv-${pairKey}`,
+        className: "branch",
+        width: V2_SETTLEMENT_CONFIG.roadWidth,
+        points: [localAnchor.point, mid, remoteAnchor.point]
+      };
+      if (this.hasParallelRoadConflict(connector, roads)) {
+        continue;
+      }
+      if (!this.isRoadUsable(connector.points, roads, V2_SETTLEMENT_CONFIG.branchRoadMinDistance * 0.65, { allowLastPointTouch: true })) {
+        continue;
+      }
+      if (this.isRoadNearHouses(connector.points, houses, V2_SETTLEMENT_CONFIG.branchRoadHouseClearance + 2)) {
+        continue;
+      }
+
+      roads.push(connector);
+      this.growHousesAlongRoad(site, connector, 6, roads, houses, pairHash ^ 0x7f4a7c15, 0.66);
+      added += 1;
     }
   }
 
@@ -379,22 +480,54 @@ export class V2SettlementGenerator {
       .filter((road) => road.className === "branch")
       .map((road) => ({
         id: road.id,
-        end: road.points[road.points.length - 1]
+        start: road.points[0],
+        end: road.points[road.points.length - 1],
+        tangentX: (() => {
+          const last = road.points[road.points.length - 1];
+          const prev = road.points[road.points.length - 2] ?? road.points[0];
+          const dx = last.x - prev.x;
+          const dy = last.y - prev.y;
+          const length = Math.hypot(dx, dy) || 1;
+          return dx / length;
+        })(),
+        tangentY: (() => {
+          const last = road.points[road.points.length - 1];
+          const prev = road.points[road.points.length - 2] ?? road.points[0];
+          const dx = last.x - prev.x;
+          const dy = last.y - prev.y;
+          const length = Math.hypot(dx, dy) || 1;
+          return dy / length;
+        })()
       }));
 
     let added = 0;
+    const usedBranchIds = new Set<string>();
+    const shortcutMaxCount = V2_SETTLEMENT_CONFIG.shortcutMaxCount;
+    const minStartDistance = V2_SETTLEMENT_CONFIG.shortcutMinBranchStartDistance;
+    const maxParallelCos = Math.cos((V2_SETTLEMENT_CONFIG.shortcutMinAngleDeg * Math.PI) / 180);
+
     for (let i = 0; i < branchEnds.length; i += 1) {
-      if (added >= 2) {
+      if (added >= shortcutMaxCount) {
         break;
       }
       for (let j = i + 1; j < branchEnds.length; j += 1) {
-        if (added >= 2) {
+        if (added >= shortcutMaxCount) {
           break;
         }
         const a = branchEnds[i];
         const b = branchEnds[j];
+        if (usedBranchIds.has(a.id) || usedBranchIds.has(b.id)) {
+          continue;
+        }
         const dist = Math.hypot(a.end.x - b.end.x, a.end.y - b.end.y);
         if (dist < 72 || dist > 184) {
+          continue;
+        }
+        if (Math.hypot(a.start.x - b.start.x, a.start.y - b.start.y) < minStartDistance) {
+          continue;
+        }
+        const alignment = Math.abs(a.tangentX * b.tangentX + a.tangentY * b.tangentY);
+        if (alignment > maxParallelCos) {
           continue;
         }
 
@@ -416,7 +549,10 @@ export class V2SettlementGenerator {
           width: V2_SETTLEMENT_CONFIG.roadWidth,
           points: [a.end, mid, b.end]
         };
-        if (!this.isRoadUsable(shortcut.points, roads, 6.2)) {
+        if (!this.isRoadUsable(shortcut.points, roads, V2_SETTLEMENT_CONFIG.branchRoadMinDistance, { allowLastPointTouch: true })) {
+          continue;
+        }
+        if (this.hasParallelRoadConflict(shortcut, roads)) {
           continue;
         }
         if (this.isRoadNearHouses(shortcut.points, houses, V2_SETTLEMENT_CONFIG.shortcutRoadHouseClearance)) {
@@ -424,9 +560,181 @@ export class V2SettlementGenerator {
         }
 
         roads.push(shortcut);
+        usedBranchIds.add(a.id);
+        usedBranchIds.add(b.id);
         added += 1;
       }
     }
+  }
+
+  private hasParallelRoadConflict(candidate: RoadSegment, roads: RoadSegment[]): boolean {
+    let alignedNearSamples = 0;
+    let distanceSum = 0;
+    for (const t of [0.35, 0.5, 0.65, 0.8, 0.92]) {
+      const sample = this.sampleRoad(candidate.points, t);
+      const match = this.findClosestAlignedRoad(
+        sample.x,
+        sample.y,
+        sample.tangentX,
+        sample.tangentY,
+        roads,
+        V2_SETTLEMENT_CONFIG.roadWidth * 1.1,
+        V2_SETTLEMENT_CONFIG.branchParallelDistance,
+        V2_SETTLEMENT_CONFIG.branchParallelMaxAngleDeg
+      );
+      if (match) {
+        alignedNearSamples += 1;
+        distanceSum += match.distance;
+      }
+    }
+    if (alignedNearSamples < 3) {
+      return false;
+    }
+    return distanceSum / alignedNearSamples < V2_SETTLEMENT_CONFIG.branchParallelDistance * 0.8;
+  }
+
+  private hasRoadReuseOpportunity(candidate: RoadSegment, roads: RoadSegment[]): boolean {
+    const sample = this.sampleRoad(candidate.points, 0.72);
+    return (
+      this.findClosestAlignedRoad(
+        sample.x,
+        sample.y,
+        sample.tangentX,
+        sample.tangentY,
+        roads,
+        V2_SETTLEMENT_CONFIG.branchReuseSnapMinDistance,
+        V2_SETTLEMENT_CONFIG.branchReuseSnapMaxDistance,
+        V2_SETTLEMENT_CONFIG.branchReuseMaxAngleDeg
+      ) !== null
+    );
+  }
+
+  private hasNearbyBranchAnchor(
+    t: number,
+    side: -1 | 1,
+    angle: number,
+    anchors: Array<{ t: number; side: -1 | 1; angle: number }>
+  ): boolean {
+    for (const anchor of anchors) {
+      if (anchor.side !== side) {
+        continue;
+      }
+      if (Math.abs(anchor.t - t) > V2_SETTLEMENT_CONFIG.branchAnchorMinDeltaT) {
+        continue;
+      }
+      if (this.angularDistance(anchor.angle, angle) < 0.52) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private angularDistance(a: number, b: number): number {
+    const twoPi = Math.PI * 2;
+    let delta = Math.abs(a - b) % twoPi;
+    if (delta > Math.PI) {
+      delta = twoPi - delta;
+    }
+    return delta;
+  }
+
+  private findClosestAlignedRoad(
+    x: number,
+    y: number,
+    tangentX: number,
+    tangentY: number,
+    roads: RoadSegment[],
+    minDistance: number,
+    maxDistance: number,
+    maxAngleDeg: number
+  ): ClosestRoadMatch | null {
+    const angleCos = Math.cos((maxAngleDeg * Math.PI) / 180);
+    let best: ClosestRoadMatch | null = null;
+
+    for (const road of roads) {
+      if (road.className === "drive") {
+        continue;
+      }
+      for (let i = 1; i < road.points.length; i += 1) {
+        const a = road.points[i - 1];
+        const b = road.points[i];
+        const seg = this.closestPointOnSegment(x, y, a.x, a.y, b.x, b.y);
+        if (seg.distance < minDistance || seg.distance > maxDistance) {
+          continue;
+        }
+        const segLength = Math.hypot(b.x - a.x, b.y - a.y);
+        if (segLength <= 1e-6) {
+          continue;
+        }
+        const segTangentX = (b.x - a.x) / segLength;
+        const segTangentY = (b.y - a.y) / segLength;
+        const alignment = Math.abs(tangentX * segTangentX + tangentY * segTangentY);
+        if (alignment < angleCos) {
+          continue;
+        }
+
+        if (!best || seg.distance < best.distance) {
+          best = {
+            roadId: road.id,
+            point: { x: seg.x, y: seg.y },
+            distance: seg.distance,
+            tangentX: segTangentX,
+            tangentY: segTangentY
+          };
+        }
+      }
+    }
+    return best;
+  }
+
+  private collectNearbySites(site: VillageSite, maxDistance: number): VillageSite[] {
+    const radiusCells = Math.ceil(maxDistance / this.siteCellSize) + 1;
+    const sites: VillageSite[] = [];
+
+    for (let cy = site.cellY - radiusCells; cy <= site.cellY + radiusCells; cy += 1) {
+      for (let cx = site.cellX - radiusCells; cx <= site.cellX + radiusCells; cx += 1) {
+        if (cx === site.cellX && cy === site.cellY) {
+          continue;
+        }
+        const other = this.siteAt(cx, cy);
+        if (!other) {
+          continue;
+        }
+        if (Math.hypot(other.x - site.x, other.y - site.y) > maxDistance) {
+          continue;
+        }
+        sites.push(other);
+      }
+    }
+
+    sites.sort((a, b) => Math.hypot(a.x - site.x, a.y - site.y) - Math.hypot(b.x - site.x, b.y - site.y));
+    return sites;
+  }
+
+  private closestPointOnRoad(road: RoadSegment, x: number, y: number): { point: Point; tangentX: number; tangentY: number } {
+    let bestDistance = Number.POSITIVE_INFINITY;
+    let bestPoint = road.points[0] ?? { x, y };
+    let bestTangentX = 1;
+    let bestTangentY = 0;
+
+    for (let i = 1; i < road.points.length; i += 1) {
+      const a = road.points[i - 1];
+      const b = road.points[i];
+      const seg = this.closestPointOnSegment(x, y, a.x, a.y, b.x, b.y);
+      if (seg.distance < bestDistance) {
+        bestDistance = seg.distance;
+        bestPoint = { x: seg.x, y: seg.y };
+        const segLength = Math.hypot(b.x - a.x, b.y - a.y);
+        bestTangentX = segLength <= 1e-6 ? 1 : (b.x - a.x) / segLength;
+        bestTangentY = segLength <= 1e-6 ? 0 : (b.y - a.y) / segLength;
+      }
+    }
+
+    return {
+      point: bestPoint,
+      tangentX: bestTangentX,
+      tangentY: bestTangentY
+    };
   }
 
   private createDirectionalRoad(
@@ -505,7 +813,7 @@ export class V2SettlementGenerator {
     };
   }
 
-  private isRoadUsable(points: Point[], existingRoads: RoadSegment[], minDistance: number): boolean {
+  private isRoadUsable(points: Point[], existingRoads: RoadSegment[], minDistance: number, options?: RoadUsageOptions): boolean {
     for (const point of points) {
       if (this.terrain.slopeAt(point.x, point.y) > 0.11) {
         return false;
@@ -514,6 +822,9 @@ export class V2SettlementGenerator {
 
     for (let i = 0; i < points.length; i += 1) {
       if (i === 0) {
+        continue;
+      }
+      if (options?.allowLastPointTouch && i === points.length - 1) {
         continue;
       }
       const p = points[i];
@@ -573,16 +884,21 @@ export class V2SettlementGenerator {
   }
 
   private distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+    return this.closestPointOnSegment(px, py, ax, ay, bx, by).distance;
+  }
+
+  private closestPointOnSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): { x: number; y: number; distance: number } {
     const vx = bx - ax;
     const vy = by - ay;
     const lenSq = vx * vx + vy * vy;
     if (lenSq <= 1e-6) {
-      return Math.hypot(px - ax, py - ay);
+      const distance = Math.hypot(px - ax, py - ay);
+      return { x: ax, y: ay, distance };
     }
     const t = clamp(((px - ax) * vx + (py - ay) * vy) / lenSq, 0, 1);
     const qx = ax + vx * t;
     const qy = ay + vy * t;
-    return Math.hypot(px - qx, py - qy);
+    return { x: qx, y: qy, distance: Math.hypot(px - qx, py - qy) };
   }
 
   private polylineLength(points: Point[]): number {

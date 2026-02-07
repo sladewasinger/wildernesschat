@@ -109,8 +109,9 @@ This project uses deterministic procedural generation with clear module boundari
   - Stage 1 anchor house + trunk road
   - Stage 2 iterative house growth from trunk
   - Stage 3 Y-branches + shortcuts
+  - Stage 4 inter-village connectors + reuse-vs-new road decisions
 - `src/v2/app.ts`
-  - Rendering and stage controls (`1-4` or `[ ]`) for visual verification.
+  - Rendering and stage controls (`1-5` or `[ ]`) for visual verification.
 
 ## Legacy
 

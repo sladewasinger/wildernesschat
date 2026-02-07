@@ -14,7 +14,7 @@
 - Keep APIs explicit. Pass config/dependencies directly rather than using hidden globals.
 - Reuse existing utilities and types before introducing new abstractions.
 - Avoid duplication. If logic is reused across systems, extract a shared helper/module.
-- Make the smallest correct change that preserves behavior unless a larger refactor is requested.
+- While making changes, if a better pattern emerges, refactor the code to support the better pattern and code maintainability.
 
 ## Comments and Readability
 
