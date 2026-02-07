@@ -116,15 +116,15 @@ All generation modules should accept config and RNG explicitly (no hidden global
 
 ### Phase 3: Settlements + Highways
 
-- [ ] Settlement suitability field.
-- [ ] Weighted Poisson village placement.
-- [ ] Regional road graph generation and terrain-aware routing.
+- [x] Settlement suitability field.
+- [x] Weighted Poisson-like village placement (deterministic jittered grid + local-maximum pruning).
+- [x] Regional road graph generation and terrain-aware routing (MST + loops + curvature and water avoidance).
 
 ### Phase 4: Local Streets + Buildings
 
 - [ ] Village-local street growth.
 - [ ] Parcel frontage extraction.
-- [ ] House footprint placement and orientation.
+- [x] House footprint placement and orientation (roadside procedural pass implemented early; parcel system pending).
 
 ### Phase 5: Forests + Fields
 
@@ -149,10 +149,10 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Prototype canvas app exists.
 - [x] Deterministic seeded generation pipeline exists (new generator + legacy WFC baseline).
 - [x] Organic terrain/water generator implemented.
-- [ ] Village prior model implemented.
-- [ ] Regional highway generator implemented.
+- [x] Village prior model implemented.
+- [x] Regional highway generator implemented.
 - [ ] Local village street generator implemented.
-- [ ] Curved-road-aligned building placement implemented.
+- [x] Curved-road-aligned building placement implemented.
 - [ ] Forest and field generation implemented.
 - [x] Full chunk streaming for new pipeline implemented.
 - [ ] Multiplayer determinism test suite implemented.

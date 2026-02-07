@@ -122,16 +122,16 @@ export class Game {
     ctx.stroke();
 
     this.hud.textContent = [
-      "Organic village generator (phase 0-2)",
+      "Organic village generator (phase 0-3)",
       "Move: WASD / Arrows",
-      "Debug toggles: 1 water 2 moisture 3 forest 4 contours 5 rivers",
+      "Debug: 1 water 2 moisture 3 forest 4 contours 5 rivers 6 roads 7 villages 8 houses",
       `Seed: ${this.world.getSeed()}`,
       `Player px: ${this.playerX.toFixed(1)}, ${this.playerY.toFixed(1)}`,
       `Chunk: ${floorDiv(this.playerX, chunkSize)}, ${floorDiv(this.playerY, chunkSize)}`,
       `Elev: ${sample.elevation.toFixed(3)} Moisture: ${sample.moisture.toFixed(3)}`,
       `Slope: ${sample.slope.toFixed(3)} Forest: ${sample.forestDensity.toFixed(3)}`,
       `Water depth: ${sample.waterDepth.toFixed(3)}`,
-      `Layers: water=${debug.showWaterMask ? "on" : "off"} moisture=${debug.showMoisture ? "on" : "off"} forest=${debug.showForestMask ? "on" : "off"} contours=${debug.showContours ? "on" : "off"} rivers=${debug.showRivers ? "on" : "off"}`
+      `Layers: water=${debug.showWaterMask ? "on" : "off"} moisture=${debug.showMoisture ? "on" : "off"} forest=${debug.showForestMask ? "on" : "off"} contours=${debug.showContours ? "on" : "off"} rivers=${debug.showRivers ? "on" : "off"} roads=${debug.showRoads ? "on" : "off"} villages=${debug.showVillages ? "on" : "off"} houses=${debug.showHouses ? "on" : "off"}`
     ].join("\n");
   }
 
@@ -158,6 +158,18 @@ export class Game {
     }
     if (event.key === "5") {
       this.world.toggleDebugLayer("showRivers");
+      return true;
+    }
+    if (event.key === "6") {
+      this.world.toggleDebugLayer("showRoads");
+      return true;
+    }
+    if (event.key === "7") {
+      this.world.toggleDebugLayer("showVillages");
+      return true;
+    }
+    if (event.key === "8") {
+      this.world.toggleDebugLayer("showHouses");
       return true;
     }
     return false;

@@ -30,6 +30,39 @@ export type VegetationConfig = {
   treeMaxRadius: number;
 };
 
+export type SettlementConfig = {
+  cellSize: number;
+  minVillageDistance: number;
+  suitabilityThreshold: number;
+  targetMoisture: number;
+  maxCoastSearch: number;
+  preferredCoastMin: number;
+  preferredCoastMax: number;
+};
+
+export type RoadConfig = {
+  regionSize: number;
+  nearestNeighbors: number;
+  maxConnectionDistance: number;
+  loopChance: number;
+  majorWidth: number;
+  minorWidth: number;
+  routeStep: number;
+  maxCurvatureOffset: number;
+};
+
+export type HouseConfig = {
+  spacing: number;
+  sideChance: number;
+  minSetback: number;
+  maxSetback: number;
+  minWidth: number;
+  maxWidth: number;
+  minDepth: number;
+  maxDepth: number;
+  maxSlope: number;
+};
+
 export type ChunkConfig = {
   pixelSize: number;
   maxCachedChunks: number;
@@ -41,12 +74,18 @@ export type DebugLayerConfig = {
   showWaterMask: boolean;
   showMoisture: boolean;
   showForestMask: boolean;
+  showRoads: boolean;
+  showVillages: boolean;
+  showHouses: boolean;
 };
 
 export type WorldConfig = {
   seed: string;
   terrain: TerrainConfig;
   vegetation: VegetationConfig;
+  settlement: SettlementConfig;
+  roads: RoadConfig;
+  houses: HouseConfig;
   chunk: ChunkConfig;
   debug: DebugLayerConfig;
 };
@@ -84,16 +123,49 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
       treeMinRadius: 2.5,
       treeMaxRadius: 7.4
     },
+    settlement: {
+      cellSize: 360,
+      minVillageDistance: 300,
+      suitabilityThreshold: 0.47,
+      targetMoisture: 0.5,
+      maxCoastSearch: 420,
+      preferredCoastMin: 90,
+      preferredCoastMax: 280
+    },
+    roads: {
+      regionSize: 1800,
+      nearestNeighbors: 3,
+      maxConnectionDistance: 900,
+      loopChance: 0.22,
+      majorWidth: 8.8,
+      minorWidth: 5.2,
+      routeStep: 80,
+      maxCurvatureOffset: 70
+    },
+    houses: {
+      spacing: 34,
+      sideChance: 0.62,
+      minSetback: 9,
+      maxSetback: 16,
+      minWidth: 10,
+      maxWidth: 18,
+      minDepth: 8,
+      maxDepth: 14,
+      maxSlope: 0.26
+    },
     chunk: {
       pixelSize: 320,
       maxCachedChunks: 196
     },
     debug: {
-      showContours: true,
+      showContours: false,
       showRivers: true,
       showWaterMask: false,
       showMoisture: false,
-      showForestMask: false
+      showForestMask: false,
+      showRoads: true,
+      showVillages: true,
+      showHouses: true
     }
   };
 };

@@ -2,6 +2,7 @@ import { clamp, floorDiv, lerp, smoothstep } from "../util/math";
 import { DebugLayerConfig, WorldConfig } from "../gen/config";
 import { hashCoords, hashString, hashToUnit, mixUint32 } from "../gen/hash";
 import { RiverSystem } from "../gen/rivers";
+import { House, SettlementFeatures, SettlementSystem, Village } from "../gen/settlements";
 import { TerrainProbe, TerrainSampler, createTerrainSampler } from "../gen/terrain";
 
 type Chunk = {
@@ -20,6 +21,7 @@ export class World {
   private readonly config: WorldConfig;
   private readonly terrain: TerrainSampler;
   private readonly rivers: RiverSystem;
+  private readonly settlements: SettlementSystem;
   private readonly seedHash: number;
   private readonly treeSeed: number;
   private readonly chunkCache = new Map<string, Chunk>();
@@ -29,6 +31,7 @@ export class World {
     this.config = config;
     this.terrain = createTerrainSampler(config);
     this.rivers = new RiverSystem(config, this.terrain);
+    this.settlements = new SettlementSystem(config, this.terrain);
     this.seedHash = hashString(`${config.seed}:surface`);
     this.treeSeed = hashString(`${config.seed}:trees`);
     this.debug = { ...config.debug };
@@ -124,6 +127,15 @@ export class World {
 
     ctx.putImageData(image, 0, 0);
     this.drawRivers(ctx, startX, startY, chunkSize);
+    const featureMargin = 140;
+    const features = this.settlements.getFeaturesForBounds(
+      startX - featureMargin,
+      startX + chunkSize + featureMargin,
+      startY - featureMargin,
+      startY + chunkSize + featureMargin
+    );
+    this.drawRoadsAndVillages(ctx, startX, startY, features);
+    this.drawHouses(ctx, startX, startY, features);
     this.drawForest(ctx, startX, startY, chunkSize);
     return canvas;
   }
@@ -137,12 +149,12 @@ export class World {
       if (terrain.waterDepth > 0) {
         const depth = clamp(terrain.waterDepth / 0.24, 0, 1);
         return {
-          r: lerp(95, 5, depth),
-          g: lerp(135, 16, depth),
-          b: lerp(165, 41, depth)
+          r: lerp(94, 14, depth),
+          g: lerp(130, 26, depth),
+          b: lerp(168, 60, depth)
         };
       }
-      return { r: 155, g: 166, b: 158 };
+      return { r: 155, g: 178, b: 144 };
     }
 
     if (this.debug.showMoisture) {
@@ -170,17 +182,17 @@ export class World {
       const coastal = terrain.shore;
 
       return {
-        r: lerp(108, 10, depth) + ripple * 4 + coastal * 28 + noiseGrain * 0.3,
-        g: lerp(129, 24, depth) + ripple * 5 + coastal * 20 + noiseGrain * 0.3,
-        b: lerp(138, 50, depth) + ripple * 8 + coastal * 10 + noiseGrain * 0.2
+        r: lerp(110, 18, depth) + ripple * 4 + coastal * 24 + noiseGrain * 0.25,
+        g: lerp(152, 42, depth) + ripple * 5 + coastal * 20 + noiseGrain * 0.25,
+        b: lerp(184, 76, depth) + ripple * 8 + coastal * 10 + noiseGrain * 0.2
       };
     }
 
     const elevationTone = smoothstep(0.18, 0.87, terrain.elevation);
     const moistureTone = smoothstep(0.1, 0.92, terrain.moisture);
-    let r = lerp(136, 173, elevationTone) - moistureTone * 15;
-    let g = lerp(144, 178, elevationTone) - moistureTone * 8;
-    let b = lerp(138, 170, elevationTone) - moistureTone * 13;
+    let r = lerp(132, 173, elevationTone) - moistureTone * 17;
+    let g = lerp(167, 196, elevationTone) - moistureTone * 11;
+    let b = lerp(122, 156, elevationTone) - moistureTone * 18;
 
     if (this.debug.showContours && this.config.terrain.contourInterval > 0) {
       const contourValue = (terrain.elevation / this.config.terrain.contourInterval) % 1;
@@ -191,10 +203,10 @@ export class World {
       }
     }
 
-    const shoreBlend = terrain.shore * 0.35;
-    r = lerp(r, 184, shoreBlend);
-    g = lerp(g, 185, shoreBlend);
-    b = lerp(b, 176, shoreBlend);
+    const shoreBlend = terrain.shore * 0.42;
+    r = lerp(r, 193, shoreBlend);
+    g = lerp(g, 198, shoreBlend);
+    b = lerp(b, 165, shoreBlend);
 
     r += noiseGrain;
     g += noiseGrain;
@@ -291,7 +303,7 @@ export class World {
     }
 
     for (const tree of densePoints) {
-      ctx.fillStyle = `rgba(49, 63, 72, ${tree.alpha.toFixed(3)})`;
+      ctx.fillStyle = `rgba(79, 109, 94, ${tree.alpha.toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(tree.x, tree.y, tree.radius, 0, Math.PI * 2);
       ctx.fill();
@@ -299,15 +311,120 @@ export class World {
 
     ctx.lineWidth = 1;
     for (const tree of edgePoints) {
-      ctx.fillStyle = `rgba(74, 90, 100, ${tree.alpha.toFixed(3)})`;
+      ctx.fillStyle = `rgba(117, 161, 138, ${tree.alpha.toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(tree.x, tree.y, tree.radius, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = "rgba(27, 35, 42, 0.92)";
+      ctx.strokeStyle = "rgba(37, 56, 47, 0.9)";
       ctx.beginPath();
       ctx.arc(tree.x, tree.y, tree.radius, 0, Math.PI * 2);
       ctx.stroke();
     }
+  }
+
+  private drawRoadsAndVillages(
+    ctx: CanvasRenderingContext2D,
+    startX: number,
+    startY: number,
+    features: SettlementFeatures
+  ): void {
+    if (!this.debug.showRoads && !this.debug.showVillages) {
+      return;
+    }
+
+    if (this.debug.showRoads) {
+      for (const road of features.roads) {
+        if (road.points.length < 2) {
+          continue;
+        }
+        ctx.beginPath();
+        ctx.moveTo(road.points[0].x - startX, road.points[0].y - startY);
+        for (let i = 1; i < road.points.length; i += 1) {
+          ctx.lineTo(road.points[i].x - startX, road.points[i].y - startY);
+        }
+
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = road.type === "major" ? "rgba(72, 72, 58, 0.55)" : "rgba(78, 82, 70, 0.45)";
+        ctx.lineWidth = road.width + 2.2;
+        ctx.stroke();
+
+        ctx.strokeStyle = road.type === "major" ? "rgba(215, 206, 166, 0.98)" : "rgba(199, 191, 154, 0.92)";
+        ctx.lineWidth = road.width;
+        ctx.stroke();
+      }
+    }
+
+    if (this.debug.showVillages) {
+      this.drawVillageMarkers(ctx, startX, startY, features.villages);
+    }
+  }
+
+  private drawVillageMarkers(
+    ctx: CanvasRenderingContext2D,
+    startX: number,
+    startY: number,
+    villages: Village[]
+  ): void {
+    for (const village of villages) {
+      const x = village.x - startX;
+      const y = village.y - startY;
+      const radius = clamp(village.radius * 0.1, 4, 10);
+      ctx.fillStyle = "rgba(247, 236, 201, 0.88)";
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(50, 60, 52, 0.82)";
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    }
+  }
+
+  private drawHouses(ctx: CanvasRenderingContext2D, startX: number, startY: number, features: SettlementFeatures): void {
+    if (!this.debug.showHouses) {
+      return;
+    }
+
+    for (const house of features.houses) {
+      this.drawHouse(ctx, startX, startY, house);
+    }
+  }
+
+  private drawHouse(ctx: CanvasRenderingContext2D, startX: number, startY: number, house: House): void {
+    const x = house.x - startX;
+    const y = house.y - startY;
+    const roofPalette = [
+      { roof: "#907367", wall: "#c3b59d" },
+      { roof: "#6f7680", wall: "#b7b8b0" },
+      { roof: "#8f6654", wall: "#c2b19e" },
+      { roof: "#7d6f5f", wall: "#bbb09f" }
+    ];
+    const palette = roofPalette[house.roofStyle % roofPalette.length];
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(house.angle);
+
+    ctx.fillStyle = "rgba(25, 33, 38, 0.2)";
+    ctx.fillRect(-house.width * 0.55 + 1.5, -house.depth * 0.5 + 2.5, house.width, house.depth);
+
+    ctx.fillStyle = palette.wall;
+    ctx.strokeStyle = "rgba(49, 51, 47, 0.8)";
+    ctx.lineWidth = 1;
+    ctx.fillRect(-house.width * 0.5, -house.depth * 0.5, house.width, house.depth);
+    ctx.strokeRect(-house.width * 0.5, -house.depth * 0.5, house.width, house.depth);
+
+    ctx.fillStyle = palette.roof;
+    ctx.fillRect(-house.width * 0.6, -house.depth * 0.52, house.width * 1.2, house.depth * 0.58);
+    ctx.strokeRect(-house.width * 0.6, -house.depth * 0.52, house.width * 1.2, house.depth * 0.58);
+
+    ctx.strokeStyle = "rgba(45, 38, 35, 0.42)";
+    ctx.beginPath();
+    ctx.moveTo(-house.width * 0.55, -house.depth * 0.4);
+    ctx.lineTo(house.width * 0.55, -house.depth * 0.4);
+    ctx.stroke();
+
+    ctx.restore();
   }
 }

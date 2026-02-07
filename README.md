@@ -1,6 +1,6 @@
 # Organic Village Generator (Pivot In Progress)
 
-This repo is now running an organic terrain/water generator (Phase 0-2) toward a Watabou-style village/countryside map.
+This repo is now running an organic terrain/water/settlement generator (Phase 0-3) toward a Watabou-style village/countryside map.
 
 The old image-trained WFC modules are still in `src/wfc/*` as legacy reference, but they are no longer used by runtime.
 
@@ -32,6 +32,22 @@ Example:
 - `3` forest mask
 - `4` contours
 - `5` rivers
+- `6` roads
+- `7` village markers
+- `8` houses
+
+## Current Generator Layers
+
+- Terrain: domain-warped elevation + moisture
+- Water: sea-level masking + rivers
+- Settlements: deterministic suitability scoring + spacing
+- Roads: regional graph (MST + loop edges) with curved routing
+- Houses: procedural roadside footprints aligned to road tangents
+
+Notes:
+
+- Contours are optional styling; toggle with `4`.
+- Moisture is an ecological scalar used by forests/settlements, not a direct water depth indicator.
 
 ## Pivot Plan
 
