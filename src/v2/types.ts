@@ -10,6 +10,14 @@ export type CubicBezierDebug = {
   p3: Point;
 };
 
+export type RoadNodeType = "elbow" | "t";
+
+export type RoadNode = {
+  x: number;
+  y: number;
+  type: RoadNodeType;
+};
+
 export type RoadClass = "trunk" | "branch" | "drive" | "shortcut";
 
 export type RoadSegment = {
@@ -18,6 +26,7 @@ export type RoadSegment = {
   width: number;
   points: Point[];
   renderPoints?: Point[] | null;
+  nodes?: RoadNode[] | null;
   bezierDebug?: CubicBezierDebug[] | null;
 };
 

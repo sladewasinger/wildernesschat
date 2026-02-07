@@ -1,15 +1,9 @@
 import { clamp, floorDiv, lerp } from "../util/math";
 import { V2SettlementGenerator } from "./generator";
 import {
-  createManualBridgeRoadBetweenAttachments,
   createManualHouseAt,
   createManualRoadBetweenHouses,
-  createManualRoadToAttachment,
-  findBridgeAttachmentForHouse,
-  findRoadAttachmentCandidatesForHouse,
-  findClosestRoadAttachmentForHouse,
-  roadDetourAlphaBetweenAttachments,
-  roadNetworkDetourAlphaBetweenAttachments
+  findRoadAttachmentCandidatesForHouse
 } from "./generator/manual-placement";
 import { V2TerrainSampler } from "./terrain";
 import { V2_RENDER_CONFIG, V2_SETTLEMENT_CONFIG, V2_STAGE_MAX, V2_STAGE_MIN, V2_VIEW_CONFIG } from "./config";
@@ -185,6 +179,9 @@ export class V2App {
     }
     const houseId = `mh-${this.manualHouses.length}`;
     this.manualHouses.push({ ...preview.house, id: houseId });
+    if (preview.secondaryAttachPoint) {
+      this.markRoadNodeTypeAt(preview.secondaryAttachPoint, "t");
+    }
     let nextRoadIndex = this.manualRoads.length;
     if (preview.secondaryRoad) {
       this.manualRoads.push(this.cloneRoadWithId(preview.secondaryRoad, `mr-${nextRoadIndex}`));
@@ -239,7 +236,7 @@ export class V2App {
       const preview = this.currentManualPreview();
       this.drawRoads(this.manualRoads, viewMinX, viewMinY);
       if (preview.road) {
-        this.drawRoads([preview.road], viewMinX, viewMinY, 0.48, true);
+        this.drawRoads([preview.road], viewMinX, viewMinY, 0.48);
       }
       if (preview.secondaryRoad) {
         this.drawRoads([preview.secondaryRoad], viewMinX, viewMinY, 0.38);
@@ -275,6 +272,7 @@ export class V2App {
         `Contour grid: ${this.currentTerrainWorldStep.toFixed(1)} world units`,
         `Manual houses: ${this.manualHouses.length}`,
         `Manual roads: ${this.manualRoads.length}`,
+        `Seed fillet radius: ${V2_SETTLEMENT_CONFIG.manualPlacement.seedDrivewayFilletRadius.toFixed(1)}`,
         `Preview connection: ${preview.mode}`,
         preview.searchRadius > 0
           ? `Preview search radius: ${Number.isFinite(preview.searchRadius) ? preview.searchRadius.toFixed(1) : "global"}`
@@ -366,7 +364,7 @@ export class V2App {
     }
 
     const hover = this.screenToWorld(this.mouseCanvasX, this.mouseCanvasY);
-    const baseHouse = createManualHouseAt("preview", hover.x, hover.y, this.terrain, this.manualRoads);
+    const baseHouse = createManualHouseAt("preview", hover.x, hover.y, this.terrain, []);
     const previous = this.manualHouses[this.manualHouses.length - 1] ?? null;
     const connection = this.resolveManualConnection(baseHouse, previous, "preview-road");
     return {
@@ -408,6 +406,7 @@ export class V2App {
       id,
       points: road.points.map((p) => ({ x: p.x, y: p.y })),
       renderPoints: road.renderPoints ? road.renderPoints.map((p) => ({ x: p.x, y: p.y })) : null,
+      nodes: road.nodes ? road.nodes.map((n) => ({ x: n.x, y: n.y, type: n.type })) : null,
       bezierDebug: road.bezierDebug
         ? road.bezierDebug.map((curve) => ({
             p0: { x: curve.p0.x, y: curve.p0.y },
@@ -433,103 +432,30 @@ export class V2App {
     searchRadius: number;
   } {
     const hasExistingRoads = this.manualRoads.length > 0;
-    const nearRoadFacingDistance = 168;
-    const searchRadius = hasExistingRoads ? Number.POSITIVE_INFINITY : previous ? Math.max(24, Math.hypot(previous.x - house.x, previous.y - house.y)) : 0;
+    const searchRadius = hasExistingRoads
+      ? Number.POSITIVE_INFINITY
+      : previous
+        ? Math.max(24, Math.hypot(previous.x - house.x, previous.y - house.y))
+        : 0;
     const terrainHouse = createManualHouseAt(house.id, house.x, house.y, this.terrain, []);
     if (hasExistingRoads) {
-      const extension = this.tryBuildRoadExtensionConnection(terrainHouse, id);
-      if (extension) {
-        return extension;
+      const connected = this.buildManualMainRoadConnection(terrainHouse, id);
+      if (connected) {
+        return connected;
       }
-    }
-    const attachCandidates = hasExistingRoads ? findRoadAttachmentCandidatesForHouse(house, this.manualRoads, searchRadius, 14) : [];
-    if (attachCandidates.length > 0) {
-      for (const attach of attachCandidates) {
-        const bridgeAttach = findBridgeAttachmentForHouse(house, this.manualRoads, attach, Math.max(searchRadius + 18, searchRadius * 1.22));
-        if (bridgeAttach) {
-          const bridgeGap = Math.hypot(attach.point.x - bridgeAttach.point.x, attach.point.y - bridgeAttach.point.y);
-          if (bridgeGap >= V2_SETTLEMENT_CONFIG.manualPlacement.bridgeMinGap) {
-            const sameRoad = attach.roadId === bridgeAttach.roadId;
-            if (sameRoad) {
-              if (bridgeGap < V2_SETTLEMENT_CONFIG.manualPlacement.bridgeSameRoadMinGap) {
-                continue;
-              }
-              const detourAlpha = roadDetourAlphaBetweenAttachments(this.manualRoads, attach, bridgeAttach);
-              if (detourAlpha !== null && detourAlpha < V2_SETTLEMENT_CONFIG.manualPlacement.bridgeSameRoadDetourAlpha) {
-                continue;
-              }
-            }
-            const networkDetourAlpha = roadNetworkDetourAlphaBetweenAttachments(this.manualRoads, attach, bridgeAttach);
-            if (networkDetourAlpha !== null && networkDetourAlpha < V2_SETTLEMENT_CONFIG.manualPlacement.bridgeNetworkDetourAlpha) {
-              continue;
-            }
-          const bridgeRoad = createManualBridgeRoadBetweenAttachments(`${id}-bridge`, attach, bridgeAttach, this.terrain);
-          if (bridgeRoad && !this.roadIntersectsHouses(bridgeRoad, this.manualHouses, new Set())) {
-            const orientedHouse = this.orientHouseTowardRoad(house, bridgeRoad);
-            const drivewayAttach = findClosestRoadAttachmentForHouse(
-              orientedHouse,
-              [bridgeRoad],
-              Math.max(36, Math.min(196, searchRadius * 0.95 + 24))
-            );
-            if (drivewayAttach) {
-              const drivewayRoad = createManualRoadToAttachment(id, orientedHouse, drivewayAttach, this.terrain);
-              if (drivewayRoad && !this.roadIntersectsHouses(drivewayRoad, this.manualHouses, new Set([orientedHouse.id]))) {
-                return {
-                  house: orientedHouse,
-                  road: drivewayRoad,
-                  secondaryRoad: bridgeRoad,
-                  mode: "bridge-road",
-                  attachPoint: drivewayAttach.point,
-                  secondaryAttachPoint: bridgeAttach.point,
-                  searchRadius
-                };
-              }
-            }
-          }
-          }
-        }
-
-        const orientedHouse = attach.distance <= nearRoadFacingDistance ? this.orientHouseTowardPoint(house, attach.point) : house;
-        const road = createManualRoadToAttachment(id, orientedHouse, attach, this.terrain);
-        if (road && !this.roadIntersectsHouses(road, this.manualHouses, new Set([orientedHouse.id]))) {
-          return {
-            house: orientedHouse,
-            road,
-            secondaryRoad: null,
-            mode: "attach-road",
-            attachPoint: attach.point,
-            secondaryAttachPoint: null,
-            searchRadius
-          };
-        }
-      }
-
-      const bestAttach = attachCandidates[0];
       return {
-        house,
+        house: terrainHouse,
         road: null,
         secondaryRoad: null,
-        mode: "attach-road",
-        attachPoint: bestAttach.point,
+        mode: "none",
+        attachPoint: null,
         secondaryAttachPoint: null,
         searchRadius
       };
     }
-
     if (!previous) {
       return {
-        house,
-        road: null,
-        secondaryRoad: null,
-        mode: "none",
-        attachPoint: null,
-        secondaryAttachPoint: null,
-        searchRadius
-      };
-    }
-    if (hasExistingRoads) {
-      return {
-        house,
+        house: terrainHouse,
         road: null,
         secondaryRoad: null,
         mode: "none",
@@ -539,11 +465,11 @@ export class V2App {
       };
     }
 
-    const seedRoad = createManualRoadBetweenHouses(id, previous, house, this.terrain);
+    const seedRoad = createManualRoadBetweenHouses(id, previous, terrainHouse, this.terrain);
     const usableRoad =
-      seedRoad && !this.roadIntersectsHouses(seedRoad, this.manualHouses, new Set([house.id, previous.id])) ? seedRoad : null;
+      seedRoad && !this.roadIntersectsHouses(seedRoad, this.manualHouses, new Set([terrainHouse.id, previous.id])) ? seedRoad : null;
     return {
-      house,
+      house: terrainHouse,
       road: usableRoad,
       secondaryRoad: null,
       mode: usableRoad ? "seed-road" : "none",
@@ -553,23 +479,7 @@ export class V2App {
     };
   }
 
-  private orientHouseTowardRoad(house: House, road: RoadSegment): House {
-    const target = this.closestPointOnRoad(house.x, house.y, road);
-    if (!target) {
-      return house;
-    }
-    const dx = target.x - house.x;
-    const dy = target.y - house.y;
-    if (Math.hypot(dx, dy) <= 1e-6) {
-      return house;
-    }
-    return {
-      ...house,
-      angle: Math.atan2(dy, dx)
-    };
-  }
-
-  private tryBuildRoadExtensionConnection(
+  private buildManualMainRoadConnection(
     house: House,
     id: string
   ): {
@@ -581,83 +491,188 @@ export class V2App {
     secondaryAttachPoint: Point | null;
     searchRadius: number;
   } | null {
-    const endpoint = this.findRoadEndpointExtensionTarget(house);
-    if (!endpoint) {
+    const contourRoads = this.manualRoads.filter((road) => road.className === "trunk" && road.points.length >= 3);
+    if (contourRoads.length === 0) {
+      return null;
+    }
+    const mainRoad = contourRoads[0];
+
+    let secondaryRoad: RoadSegment | null = null;
+    let targetRoads: RoadSegment[] = [mainRoad];
+    const directAttachAnyTrunk = this.findClosestAttachmentAvoidingRoadNodes(house, contourRoads, false);
+    const maxDirectAttachDistance = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackWorld * 2.2;
+
+    if (directAttachAnyTrunk && directAttachAnyTrunk.distance <= maxDirectAttachDistance) {
+      const drivewayRoad = this.buildSimpleTDrivewayRoad(id, house, directAttachAnyTrunk);
+      if (!drivewayRoad) {
+        return null;
+      }
+      if (this.roadIntersectsHouses(drivewayRoad, this.manualHouses, new Set([house.id]))) {
+        return null;
+      }
+      return {
+        house,
+        road: drivewayRoad,
+        secondaryRoad: null,
+        mode: "attach-road",
+        attachPoint: directAttachAnyTrunk.point,
+        secondaryAttachPoint: null,
+        searchRadius: Number.POSITIVE_INFINITY
+      };
+    }
+
+    const beyondMainExtent = this.isBeyondMainRoadExtent(house, mainRoad);
+    if (!beyondMainExtent) {
       return null;
     }
 
-    const extensionRoad: RoadSegment = {
-      id: `${id}-extend`,
-      className: "trunk",
-      width: V2_SETTLEMENT_CONFIG.roads.width,
-      points: [endpoint.start, endpoint.end]
-    };
-    if (this.roadIntersectsHouses(extensionRoad, this.manualHouses, new Set())) {
+    const endpoint = this.findRoadEndpointExtensionTarget(house, contourRoads);
+    if (endpoint) {
+      const contourStart = this.projectPointToNearestContour(endpoint.start);
+      const contourTarget = this.projectPointToNearestContour(endpoint.target);
+      const extensionPoints = this.traceContourExtensionPath(contourStart, contourTarget, endpoint.outward);
+      if (!extensionPoints || extensionPoints.length < 2) {
+        return null;
+      }
+      const extensionRoad: RoadSegment = {
+        id: `${id}-extend`,
+        className: "trunk",
+        width: V2_SETTLEMENT_CONFIG.roads.width,
+        points: extensionPoints,
+        nodes: [
+          { x: contourStart.x, y: contourStart.y, type: "t" },
+          { x: contourTarget.x, y: contourTarget.y, type: "elbow" }
+        ]
+      };
+      const allowed = this.extensionAllowedHouseIds(endpoint.start);
+      if (this.roadIntersectsHouses(extensionRoad, this.manualHouses, allowed)) {
+        return null;
+      }
+      secondaryRoad = extensionRoad;
+      targetRoads = [extensionRoad];
+    } else {
       return null;
     }
 
-    const orientedHouse = this.orientHouseTowardRoad(house, extensionRoad);
-    const drivewayAttach = findClosestRoadAttachmentForHouse(
-      orientedHouse,
-      [extensionRoad],
-      Math.max(46, endpoint.distanceToHouse + 38)
-    );
+    const drivewayAttach = secondaryRoad && endpoint
+      ? {
+          roadId: secondaryRoad.id,
+          point: { x: endpoint.target.x, y: endpoint.target.y },
+          tangentX: endpoint.outward.x,
+          tangentY: endpoint.outward.y,
+          distance: Math.hypot(endpoint.target.x - house.x, endpoint.target.y - house.y)
+        }
+      : this.findClosestAttachmentAvoidingRoadNodes(house, targetRoads);
     if (!drivewayAttach) {
       return null;
     }
-    const drivewayRoad = createManualRoadToAttachment(id, orientedHouse, drivewayAttach, this.terrain);
+    if (!secondaryRoad && drivewayAttach.distance > V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackWorld * 1.9) {
+      return null;
+    }
+    const drivewayRoad = this.buildSimpleTDrivewayRoad(id, house, drivewayAttach);
     if (!drivewayRoad) {
       return null;
     }
-    if (this.roadIntersectsHouses(drivewayRoad, this.manualHouses, new Set([orientedHouse.id]))) {
+    if (this.roadIntersectsHouses(drivewayRoad, this.manualHouses, new Set([house.id]))) {
       return null;
     }
 
     return {
-      house: orientedHouse,
+      house,
       road: drivewayRoad,
-      secondaryRoad: extensionRoad,
+      secondaryRoad,
       mode: "attach-road",
       attachPoint: drivewayAttach.point,
-      secondaryAttachPoint: endpoint.start,
+      secondaryAttachPoint: secondaryRoad ? endpoint?.start ?? null : null,
       searchRadius: Number.POSITIVE_INFINITY
     };
   }
 
+  private buildSimpleTDrivewayRoad(
+    id: string,
+    house: House,
+    attach: { point: Point; tangentX: number; tangentY: number }
+  ): RoadSegment | null {
+    const front = this.houseFrontPoint(house);
+    const logicPoints = this.dedupePoints([front, attach.point]);
+    if (logicPoints.length < 2) {
+      return null;
+    }
 
-  private findRoadEndpointExtensionTarget(house: House): { start: Point; end: Point; distanceToHouse: number } | null {
+    return {
+      id,
+      className: "drive",
+      width: V2_SETTLEMENT_CONFIG.roads.width,
+      points: logicPoints
+    };
+  }
+
+  private isBeyondMainRoadExtent(house: House, mainRoad: RoadSegment): boolean {
+    const anchors = this.extensionAnchorsForRoad(mainRoad);
+    if (anchors.length === 0) {
+      return false;
+    }
+    const target = this.projectPointToNearestContour(this.houseFrontPoint(house));
+    for (const node of anchors) {
+      const dx = target.x - node.anchor.x;
+      const dy = target.y - node.anchor.y;
+      const along = dx * node.outward.x + dy * node.outward.y;
+      if (along <= 26) {
+        continue;
+      }
+      const lateral = Math.abs(dx * node.outward.y - dy * node.outward.x);
+      if (lateral <= Math.max(42, along * 0.95)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+
+  private findRoadEndpointExtensionTarget(
+    house: House,
+    roads: RoadSegment[] = this.manualRoads
+  ): { start: Point; target: Point; outward: Point; distanceToHouse: number } | null {
+    const houseFront = this.houseFrontPoint(house);
+    const contourTarget = this.projectPointToNearestContour(houseFront);
     let best:
       | {
           start: Point;
-          end: Point;
+          target: Point;
+          outward: Point;
           distanceToHouse: number;
           score: number;
         }
       | null = null;
 
-    for (const road of this.manualRoads) {
-      if (road.points.length < 2) {
+    const allNodes: { anchor: Point; outward: Point; dist: number }[] = [];
+    for (const road of roads) {
+      for (const node of this.extensionAnchorsForRoad(road)) {
+        allNodes.push({
+          anchor: node.anchor,
+          outward: node.outward,
+          dist: Math.hypot(node.anchor.x - contourTarget.x, node.anchor.y - contourTarget.y)
+        });
+      }
+    }
+    if (allNodes.length === 0) {
+      return null;
+    }
+    allNodes.sort((a, b) => a.dist - b.dist);
+    const nearestDist = allNodes[0].dist;
+    const maxDistForConsideration = nearestDist + 28;
+    let considered = 0;
+    for (const node of allNodes) {
+      if (node.dist > maxDistForConsideration && considered >= 1) {
         continue;
       }
-      const start = road.points[0];
-      const startNext = road.points[1];
-      const end = road.points[road.points.length - 1];
-      const endPrev = road.points[road.points.length - 2];
-
-      const startOut = this.normalizeDirection(start.x - startNext.x, start.y - startNext.y);
-      if (startOut) {
-        const candidate = this.evaluateRoadEndpointForExtension(house, start, startOut);
-        if (candidate && (!best || candidate.score < best.score)) {
-          best = candidate;
-        }
+      const candidate = this.evaluateRoadEndpointForExtension(house, contourTarget, node.anchor, node.outward);
+      if (candidate && (!best || candidate.score < best.score)) {
+        best = candidate;
       }
-
-      const endOut = this.normalizeDirection(end.x - endPrev.x, end.y - endPrev.y);
-      if (endOut) {
-        const candidate = this.evaluateRoadEndpointForExtension(house, end, endOut);
-        if (candidate && (!best || candidate.score < best.score)) {
-          best = candidate;
-        }
+      considered += 1;
+      if (considered >= 4) {
+        break;
       }
     }
 
@@ -666,41 +681,379 @@ export class V2App {
     }
     return {
       start: best.start,
-      end: best.end,
+      target: best.target,
+      outward: best.outward,
       distanceToHouse: best.distanceToHouse
     };
   }
 
   private evaluateRoadEndpointForExtension(
     house: House,
+    contourTarget: Point,
     endpoint: Point,
     outward: Point
-  ): { start: Point; end: Point; distanceToHouse: number; score: number } | null {
-    const toHouseX = house.x - endpoint.x;
-    const toHouseY = house.y - endpoint.y;
-    const along = toHouseX * outward.x + toHouseY * outward.y;
-    if (along < 36) {
+  ): { start: Point; target: Point; outward: Point; distanceToHouse: number; score: number } | null {
+    const toTargetX = contourTarget.x - endpoint.x;
+    const toTargetY = contourTarget.y - endpoint.y;
+    let chosenOutward = outward;
+    let along = toTargetX * chosenOutward.x + toTargetY * chosenOutward.y;
+    if (along < 0) {
+      const flipped = { x: -outward.x, y: -outward.y };
+      const flippedAlong = toTargetX * flipped.x + toTargetY * flipped.y;
+      if (flippedAlong > along) {
+        chosenOutward = flipped;
+        along = flippedAlong;
+      }
+    }
+    if (along < 8) {
       return null;
     }
-    const lateral = Math.abs(toHouseX * outward.y - toHouseY * outward.x);
-    if (lateral > Math.max(24, along * 0.52)) {
-      return null;
-    }
-
-    const extensionLen = clamp(along, 40, 240);
-    const end: Point = {
-      x: endpoint.x + outward.x * extensionLen,
-      y: endpoint.y + outward.y * extensionLen
-    };
-    const distanceToHouse = Math.hypot(house.x - end.x, house.y - end.y);
-    const score = lateral * 2 + distanceToHouse * 0.7 + Math.abs(extensionLen - along) * 0.15;
+    const lateral = Math.abs(toTargetX * chosenOutward.y - toTargetY * chosenOutward.x);
+    const distanceToHouse = Math.hypot(house.x - contourTarget.x, house.y - contourTarget.y);
+    const endpointDist = Math.hypot(contourTarget.x - endpoint.x, contourTarget.y - endpoint.y);
+    const score = endpointDist * 1.15 + lateral * 0.45 + distanceToHouse * 0.72 + along * 0.12;
 
     return {
       start: endpoint,
-      end,
+      target: contourTarget,
+      outward: chosenOutward,
       distanceToHouse,
       score
     };
+  }
+
+  private extensionAnchorsForRoad(road: RoadSegment): { anchor: Point; outward: Point }[] {
+    const anchors: { anchor: Point; outward: Point }[] = [];
+    const pts = road.points;
+    if (pts.length < 2) {
+      return anchors;
+    }
+
+    const addAnchor = (anchor: Point, towardInterior: Point): void => {
+      const outward = this.normalizeDirection(anchor.x - towardInterior.x, anchor.y - towardInterior.y);
+      if (!outward) {
+        return;
+      }
+      anchors.push({ anchor, outward });
+    };
+
+    if (road.nodes && road.nodes.length > 0) {
+      for (const node of road.nodes) {
+        if (node.type !== "elbow") {
+          continue;
+        }
+        const nearest = this.nearestInteriorPointOnRoad(road, node);
+        if (!nearest) {
+          continue;
+        }
+        addAnchor({ x: node.x, y: node.y }, nearest);
+      }
+      return anchors;
+    }
+
+    // Seed roads keep house-front endpoints in logic points; extension should continue from contour corner nodes.
+    if (road.renderPoints && pts.length >= 4) {
+      addAnchor(pts[1], pts[2]);
+      addAnchor(pts[pts.length - 2], pts[pts.length - 3]);
+      return anchors;
+    }
+
+    addAnchor(pts[0], pts[1]);
+    addAnchor(pts[pts.length - 1], pts[pts.length - 2]);
+    return anchors;
+  }
+
+  private findClosestAttachmentAvoidingRoadNodes(
+    house: House,
+    roads: RoadSegment[],
+    allowNodeFallback = true
+  ): { roadId: string; point: Point; tangentX: number; tangentY: number; distance: number } | null {
+    const candidates = findRoadAttachmentCandidatesForHouse(house, roads, Number.POSITIVE_INFINITY, 24);
+    if (candidates.length === 0) {
+      return null;
+    }
+    const nodeSnapEps = 4.2;
+    for (const candidate of candidates) {
+      const road = roads.find((r) => r.id === candidate.roadId);
+      if (!road || !road.nodes || road.nodes.length === 0) {
+        return candidate;
+      }
+      const nearExistingNode = road.nodes.some((n) => Math.hypot(n.x - candidate.point.x, n.y - candidate.point.y) <= nodeSnapEps);
+      if (!nearExistingNode) {
+        return candidate;
+      }
+    }
+    return allowNodeFallback ? candidates[0] : null;
+  }
+
+  private nearestInteriorPointOnRoad(road: RoadSegment, node: Point): Point | null {
+    if (road.points.length < 2) {
+      return null;
+    }
+    let best: Point | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const p of road.points) {
+      const d = Math.hypot(p.x - node.x, p.y - node.y);
+      if (d > 1e-4 && d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  private markRoadNodeTypeAt(point: Point, type: "elbow" | "t"): void {
+    const eps = 4;
+    for (const road of this.manualRoads) {
+      if (!road.nodes || road.nodes.length === 0) {
+        continue;
+      }
+      for (const node of road.nodes) {
+        if (Math.hypot(node.x - point.x, node.y - point.y) <= eps) {
+          node.type = type;
+        }
+      }
+    }
+  }
+
+  private extensionAllowedHouseIds(anchor: Point): Set<string> {
+    const nearest = [...this.manualHouses]
+      .map((house) => ({ id: house.id, d: Math.hypot(house.x - anchor.x, house.y - anchor.y) }))
+      .sort((a, b) => a.d - b.d);
+    const allowed = new Set<string>();
+    if (nearest.length > 0 && nearest[0].d <= 96) {
+      allowed.add(nearest[0].id);
+    }
+    if (nearest.length > 1 && nearest[1].d <= 96) {
+      allowed.add(nearest[1].id);
+    }
+    return allowed;
+  }
+
+  private traceContourExtensionPath(start: Point, end: Point, preferredOutward: Point): Point[] | null {
+    const span = Math.hypot(end.x - start.x, end.y - start.y);
+    if (span <= 1e-6) {
+      return null;
+    }
+    const stepLen = clamp(span / 18, 4, 10);
+    const maxSteps = Math.ceil(span / stepLen) * 10;
+    const targetElev = this.terrain.elevationAt(start.x, start.y);
+    const points: Point[] = [{ x: start.x, y: start.y }];
+    let cur = { x: start.x, y: start.y };
+    for (let i = 0; i < maxSteps; i += 1) {
+      const toEnd = this.normalizeDirection(end.x - cur.x, end.y - cur.y);
+      if (!toEnd) {
+        break;
+      }
+      const remaining = Math.hypot(end.x - cur.x, end.y - cur.y);
+      if (remaining <= stepLen * 1.35) {
+        points.push({ x: end.x, y: end.y });
+        const finalized = this.dedupePoints(points);
+        if (this.pathLooksTooStraight(finalized, start, end)) {
+          return this.buildContourConnectorFallback(start, end, preferredOutward);
+        }
+        return finalized;
+      }
+
+      let contourDir = this.contourDirectionAt(cur.x, cur.y, 16);
+      const contourFlip = { x: -contourDir.x, y: -contourDir.y };
+      if (points.length === 1) {
+        if (contourDir.x * preferredOutward.x + contourDir.y * preferredOutward.y < contourFlip.x * preferredOutward.x + contourFlip.y * preferredOutward.y) {
+          contourDir = contourFlip;
+        }
+      } else {
+        const aheadA = Math.hypot(end.x - (cur.x + contourDir.x * stepLen), end.y - (cur.y + contourDir.y * stepLen));
+        const aheadB = Math.hypot(end.x - (cur.x + contourFlip.x * stepLen), end.y - (cur.y + contourFlip.y * stepLen));
+        if (aheadB < aheadA) {
+          contourDir = contourFlip;
+        }
+      }
+      const next = {
+        x: cur.x + contourDir.x * stepLen,
+        y: cur.y + contourDir.y * stepLen
+      };
+      const grad = this.terrainGradientAt(next.x, next.y, 16);
+      if (grad) {
+        const elevErr = this.terrain.elevationAt(next.x, next.y) - targetElev;
+        const correction = clamp(elevErr / grad.magnitude, -stepLen * 0.8, stepLen * 0.8);
+        next.x -= grad.normal.x * correction;
+        next.y -= grad.normal.y * correction;
+      }
+      const tooCloseToHistory = points.length > 8 && points.slice(0, -6).some((p) => Math.hypot(next.x - p.x, next.y - p.y) < stepLen * 0.7);
+      if (tooCloseToHistory) {
+        const nudged = this.normalizeDirection(next.x - cur.x + toEnd.x * stepLen * 0.22, next.y - cur.y + toEnd.y * stepLen * 0.22);
+        if (!nudged) {
+          break;
+        }
+        const n2 = {
+          x: cur.x + nudged.x * stepLen,
+          y: cur.y + nudged.y * stepLen
+        };
+        points.push(n2);
+        cur = n2;
+        continue;
+      }
+      points.push(next);
+      cur = next;
+    }
+
+    return this.buildContourConnectorFallback(start, end, preferredOutward);
+  }
+
+  private pathLooksTooStraight(points: Point[], start: Point, end: Point): boolean {
+    if (points.length < 3) {
+      return true;
+    }
+    const direct = Math.hypot(end.x - start.x, end.y - start.y);
+    if (direct <= 1e-6) {
+      return true;
+    }
+    if (direct < 52) {
+      return false;
+    }
+    let length = 0;
+    for (let i = 1; i < points.length; i += 1) {
+      length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    }
+    return length / direct < 1.035;
+  }
+
+  private buildContourConnectorFallback(start: Point, end: Point, preferredOutward: Point): Point[] | null {
+    const span = Math.hypot(end.x - start.x, end.y - start.y);
+    if (span <= 1e-6) {
+      return null;
+    }
+    const dir = this.normalizeDirection(end.x - start.x, end.y - start.y);
+    if (!dir) {
+      return null;
+    }
+    let sTan = this.contourDirectionAt(start.x, start.y, 16);
+    const sFlip = { x: -sTan.x, y: -sTan.y };
+    const sScore = sTan.x * preferredOutward.x + sTan.y * preferredOutward.y + sTan.x * dir.x + sTan.y * dir.y;
+    const sFlipScore = sFlip.x * preferredOutward.x + sFlip.y * preferredOutward.y + sFlip.x * dir.x + sFlip.y * dir.y;
+    if (sFlipScore > sScore) {
+      sTan = sFlip;
+    }
+    let eTan = this.contourDirectionAt(end.x, end.y, 16);
+    const eFlip = { x: -eTan.x, y: -eTan.y };
+    const eScore = eTan.x * -dir.x + eTan.y * -dir.y;
+    const eFlipScore = eFlip.x * -dir.x + eFlip.y * -dir.y;
+    if (eFlipScore > eScore) {
+      eTan = eFlip;
+    }
+
+    const lead = clamp(span * 0.22, 14, 68);
+    const p0 = start;
+    const p1 = { x: start.x + sTan.x * lead, y: start.y + sTan.y * lead };
+    const p2 = { x: end.x + eTan.x * lead, y: end.y + eTan.y * lead };
+    const p3 = end;
+    const steps = clamp(Math.round(span / 4.2), 12, 44);
+    const points: Point[] = [];
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / steps;
+      const omt = 1 - t;
+      points.push({
+        x: omt * omt * omt * p0.x + 3 * omt * omt * t * p1.x + 3 * omt * t * t * p2.x + t * t * t * p3.x,
+        y: omt * omt * omt * p0.y + 3 * omt * omt * t * p1.y + 3 * omt * t * t * p2.y + t * t * t * p3.y
+      });
+    }
+    return this.dedupePoints(points);
+  }
+
+  private terrainGradientAt(x: number, y: number, step: number): { normal: Point; magnitude: number } | null {
+    const gx = this.terrain.elevationAt(x + step, y) - this.terrain.elevationAt(x - step, y);
+    const gy = this.terrain.elevationAt(x, y + step) - this.terrain.elevationAt(x, y - step);
+    const gradNorm = Math.hypot(gx, gy);
+    if (gradNorm <= 1e-8) {
+      return null;
+    }
+    const magnitude = gradNorm / (2 * step);
+    if (magnitude <= 1e-8) {
+      return null;
+    }
+    return {
+      normal: { x: gx / gradNorm, y: gy / gradNorm },
+      magnitude
+    };
+  }
+
+  private contourDirectionAt(x: number, y: number, step: number): Point {
+    const gx = this.terrain.elevationAt(x + step, y) - this.terrain.elevationAt(x - step, y);
+    const gy = this.terrain.elevationAt(x, y + step) - this.terrain.elevationAt(x, y - step);
+    const contourX = -gy;
+    const contourY = gx;
+    const len = Math.hypot(contourX, contourY);
+    if (len <= 1e-6) {
+      return { x: 1, y: 0 };
+    }
+    return { x: contourX / len, y: contourY / len };
+  }
+
+  private projectPointToNearestContour(point: Point): Point {
+    const contourLevels = 22;
+    const step = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackSampleStep;
+    const sample = this.signedContourDistance(point.x, point.y, step, contourLevels);
+    if (Math.abs(sample.grad) <= 1e-6) {
+      return { x: point.x, y: point.y };
+    }
+    return {
+      x: point.x - sample.normal.x * sample.distance,
+      y: point.y - sample.normal.y * sample.distance
+    };
+  }
+
+  private signedContourDistance(
+    x: number,
+    y: number,
+    sampleStep: number,
+    contourLevels: number
+  ): { distance: number; grad: number; normal: Point } {
+    const gx = this.terrain.elevationAt(x + sampleStep, y) - this.terrain.elevationAt(x - sampleStep, y);
+    const gy = this.terrain.elevationAt(x, y + sampleStep) - this.terrain.elevationAt(x, y - sampleStep);
+    const gradNorm = Math.hypot(gx, gy);
+    if (gradNorm <= 1e-8) {
+      return {
+        distance: 0,
+        grad: 0,
+        normal: { x: 1, y: 0 }
+      };
+    }
+    const grad = gradNorm / (2 * sampleStep);
+    const elev = this.terrain.elevationAt(x, y);
+    const eScaled = elev * contourLevels;
+    const nearestScaled = Math.round(eScaled - 0.5) + 0.5;
+    const nearestElev = nearestScaled / contourLevels;
+    return {
+      distance: (elev - nearestElev) / grad,
+      grad,
+      normal: { x: gx / gradNorm, y: gy / gradNorm }
+    };
+  }
+
+  private houseFrontPoint(house: House): Point {
+    const forwardX = Math.cos(house.angle);
+    const forwardY = Math.sin(house.angle);
+    const frontOffset = house.width * 0.5 - V2_SETTLEMENT_CONFIG.roads.width * 0.24;
+    return {
+      x: house.x + forwardX * frontOffset,
+      y: house.y + forwardY * frontOffset
+    };
+  }
+
+  private dedupePoints(points: Point[]): Point[] {
+    if (points.length <= 1) {
+      return points;
+    }
+    const out: Point[] = [points[0]];
+    for (let i = 1; i < points.length; i += 1) {
+      const prev = out[out.length - 1];
+      const next = points[i];
+      if (Math.hypot(next.x - prev.x, next.y - prev.y) <= 1e-4) {
+        continue;
+      }
+      out.push(next);
+    }
+    return out;
   }
 
   private normalizeDirection(x: number, y: number): Point | null {
@@ -712,50 +1065,6 @@ export class V2App {
       x: x / len,
       y: y / len
     };
-  }
-
-  private orientHouseTowardPoint(house: House, point: Point): House {
-    const dx = point.x - house.x;
-    const dy = point.y - house.y;
-    if (Math.hypot(dx, dy) <= 1e-6) {
-      return house;
-    }
-    return {
-      ...house,
-      angle: Math.atan2(dy, dx)
-    };
-  }
-
-  private closestPointOnRoad(x: number, y: number, road: RoadSegment): Point | null {
-    if (road.points.length < 2) {
-      return null;
-    }
-
-    let best: Point | null = null;
-    let bestDistSq = Number.POSITIVE_INFINITY;
-
-    for (let i = 1; i < road.points.length; i += 1) {
-      const a = road.points[i - 1];
-      const b = road.points[i];
-      const vx = b.x - a.x;
-      const vy = b.y - a.y;
-      const lenSq = vx * vx + vy * vy;
-      if (lenSq <= 1e-6) {
-        continue;
-      }
-      const t = clamp(((x - a.x) * vx + (y - a.y) * vy) / lenSq, 0, 1);
-      const qx = a.x + vx * t;
-      const qy = a.y + vy * t;
-      const dx = qx - x;
-      const dy = qy - y;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq;
-        best = { x: qx, y: qy };
-      }
-    }
-
-    return best;
   }
 
   private roadIntersectsHouses(road: RoadSegment, houses: House[], allowedHouseIds: Set<string>): boolean {

@@ -178,6 +178,11 @@ export const createManualRoadBetweenHouses = (
     width: V2_SETTLEMENT_CONFIG.roads.width,
     points,
     renderPoints
+    ,
+    nodes: [
+      { x: fromRoadEnd.x, y: fromRoadEnd.y, type: "elbow" },
+      { x: toRoadEnd.x, y: toRoadEnd.y, type: "elbow" }
+    ]
   };
 };
 
