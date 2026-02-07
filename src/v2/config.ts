@@ -39,6 +39,7 @@ export const V2_SETTLEMENT_CONFIG = {
     attachmentBendRadius: 500,
     seedRoadBendRadius: 28,
     drivewayStubLength: 9,
+    contourLevels: 16,
     contourSetbackWorld: 20,
     contourSetbackSampleStep: 8,
     seedDrivewayFilletRadius: 10,

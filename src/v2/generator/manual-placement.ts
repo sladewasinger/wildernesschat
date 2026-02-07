@@ -864,7 +864,7 @@ const closestRoadFacingDirectionAt = (x: number, y: number, roads: RoadSegment[]
 };
 
 const snapHouseToContourSetback = (terrain: V2TerrainSampler, x: number, y: number): Point => {
-  const contourLevels = 22;
+  const contourLevels = V2_SETTLEMENT_CONFIG.manualPlacement.contourLevels;
   const targetSetback = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackWorld;
   const sampleStep = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackSampleStep;
   const initial = signedContourDistance(terrain, x, y, sampleStep, contourLevels);
@@ -893,8 +893,8 @@ const signedContourDistance = (
   sampleStep: number,
   contourLevels: number
 ): { distance: number; grad: number; normal: Point } => {
-  const gx = terrain.elevationAt(x + sampleStep, y) - terrain.elevationAt(x - sampleStep, y);
-  const gy = terrain.elevationAt(x, y + sampleStep) - terrain.elevationAt(x, y - sampleStep);
+  const gx = terrain.elevationAtRender(x + sampleStep, y) - terrain.elevationAtRender(x - sampleStep, y);
+  const gy = terrain.elevationAtRender(x, y + sampleStep) - terrain.elevationAtRender(x, y - sampleStep);
   const gradNorm = Math.hypot(gx, gy);
   if (gradNorm <= 1e-8) {
     return {
@@ -904,11 +904,11 @@ const signedContourDistance = (
     };
   }
   const grad = gradNorm / (2 * sampleStep);
-  const eScaled = terrain.elevationAt(x, y) * contourLevels;
+  const eScaled = terrain.elevationAtRender(x, y) * contourLevels;
   const nearestScaled = Math.round(eScaled - 0.5) + 0.5;
   const nearestElev = nearestScaled / contourLevels;
   return {
-    distance: (terrain.elevationAt(x, y) - nearestElev) / grad,
+    distance: (terrain.elevationAtRender(x, y) - nearestElev) / grad,
     grad,
     normal: { x: gx / gradNorm, y: gy / gradNorm }
   };
@@ -917,7 +917,7 @@ const signedContourDistance = (
 const projectPointToNearestContour = (terrain: V2TerrainSampler, x: number | Point, y?: number): Point => {
   const px = typeof x === "number" ? x : x.x;
   const py = typeof x === "number" ? (y ?? 0) : x.y;
-  const contourLevels = 22;
+  const contourLevels = V2_SETTLEMENT_CONFIG.manualPlacement.contourLevels;
   const sampleStep = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackSampleStep;
   const sample = signedContourDistance(terrain, px, py, sampleStep, contourLevels);
   if (Math.abs(sample.grad) <= 1e-6) {
@@ -1117,11 +1117,11 @@ const buildContourSpline = (start: Point, end: Point, terrain: V2TerrainSampler)
   const normalY = dirX;
   const interiorCount = Math.max(2, Math.min(6, Math.round(span / 92)));
   const lateralMax = clamp(span * 0.24, 16, 128);
-  const targetElevation = (terrain.elevationAt(start.x, start.y) + terrain.elevationAt(end.x, end.y)) * 0.5;
+  const targetElevation = (terrain.elevationAtRender(start.x, start.y) + terrain.elevationAtRender(end.x, end.y)) * 0.5;
 
   const controls: Point[] = [start];
   let prevPoint = start;
-  let prevElevation = terrain.elevationAt(start.x, start.y);
+  let prevElevation = terrain.elevationAtRender(start.x, start.y);
   let previousOffset = 0;
 
   for (let i = 1; i <= interiorCount; i += 1) {
@@ -1144,7 +1144,7 @@ const buildContourSpline = (start: Point, end: Point, terrain: V2TerrainSampler)
         continue;
       }
 
-      const elevation = terrain.elevationAt(x, y);
+      const elevation = terrain.elevationAtRender(x, y);
       const segLen = Math.hypot(x - prevPoint.x, y - prevPoint.y);
       if (segLen < 6) {
         continue;
@@ -1181,7 +1181,7 @@ const buildContourSpline = (start: Point, end: Point, terrain: V2TerrainSampler)
     if (!best) {
       best = { x: baseX, y: baseY };
       bestOffset = 0;
-      bestElevation = terrain.elevationAt(baseX, baseY);
+      bestElevation = terrain.elevationAtRender(baseX, baseY);
     }
 
     controls.push(best);
@@ -1204,8 +1204,8 @@ const buildContourSpline = (start: Point, end: Point, terrain: V2TerrainSampler)
 };
 
 const closestContourFacingDirectionAt = (terrain: V2TerrainSampler, x: number, y: number, step: number): Point => {
-  const gx = terrain.elevationAt(x + step, y) - terrain.elevationAt(x - step, y);
-  const gy = terrain.elevationAt(x, y + step) - terrain.elevationAt(x, y - step);
+  const gx = terrain.elevationAtRender(x + step, y) - terrain.elevationAtRender(x - step, y);
+  const gy = terrain.elevationAtRender(x, y + step) - terrain.elevationAtRender(x, y - step);
   const len = Math.hypot(gx, gy);
   if (len <= 1e-6) {
     return { x: 1, y: 0 };
@@ -1215,8 +1215,8 @@ const closestContourFacingDirectionAt = (terrain: V2TerrainSampler, x: number, y
   const downhillX = -uphillX;
   const downhillY = -uphillY;
 
-  const contourLevels = 22;
-  const eScaled = terrain.elevationAt(x, y) * contourLevels;
+  const contourLevels = V2_SETTLEMENT_CONFIG.manualPlacement.contourLevels;
+  const eScaled = terrain.elevationAtRender(x, y) * contourLevels;
   const above = Math.ceil(eScaled - 0.5) + 0.5;
   const below = Math.floor(eScaled - 0.5) + 0.5;
   const deltaUp = Math.max(0, above - eScaled);
@@ -1233,8 +1233,8 @@ const closestContourFacingDirectionAt = (terrain: V2TerrainSampler, x: number, y
 };
 
 const contourDirectionAt = (terrain: V2TerrainSampler, x: number, y: number, step: number): Point => {
-  const gx = terrain.elevationAt(x + step, y) - terrain.elevationAt(x - step, y);
-  const gy = terrain.elevationAt(x, y + step) - terrain.elevationAt(x, y - step);
+  const gx = terrain.elevationAtRender(x + step, y) - terrain.elevationAtRender(x - step, y);
+  const gy = terrain.elevationAtRender(x, y + step) - terrain.elevationAtRender(x, y - step);
   const contourX = -gy;
   const contourY = gx;
   const len = Math.hypot(contourX, contourY);

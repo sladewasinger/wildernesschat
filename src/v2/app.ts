@@ -498,6 +498,8 @@ export class V2App {
     const mainRoad = contourRoads[0];
 
     let secondaryRoad: RoadSegment | null = null;
+    let extensionAttachPoint: Point | null = null;
+    let extensionAttachTangent: Point | null = null;
     let targetRoads: RoadSegment[] = [mainRoad];
     const directAttachAnyTrunk = this.findClosestAttachmentAvoidingRoadNodes(house, contourRoads, false);
     const maxDirectAttachDistance = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackWorld * 2.2;
@@ -521,8 +523,8 @@ export class V2App {
       };
     }
 
-    const beyondMainExtent = this.isBeyondMainRoadExtent(house, mainRoad);
-    if (!beyondMainExtent) {
+    const beyondAnyExtent = contourRoads.some((road) => this.isBeyondMainRoadExtent(house, road));
+    if (!beyondAnyExtent) {
       return null;
     }
 
@@ -534,33 +536,39 @@ export class V2App {
       if (!extensionPoints || extensionPoints.length < 2) {
         return null;
       }
+      const extensionStart = extensionPoints[0];
+      const extensionEnd = extensionPoints[extensionPoints.length - 1];
+      const extensionPrev = extensionPoints[Math.max(0, extensionPoints.length - 2)];
+      const endTangent = this.normalizeDirection(extensionEnd.x - extensionPrev.x, extensionEnd.y - extensionPrev.y) ?? endpoint.outward;
       const extensionRoad: RoadSegment = {
         id: `${id}-extend`,
         className: "trunk",
         width: V2_SETTLEMENT_CONFIG.roads.width,
         points: extensionPoints,
         nodes: [
-          { x: contourStart.x, y: contourStart.y, type: "t" },
-          { x: contourTarget.x, y: contourTarget.y, type: "elbow" }
+          { x: extensionStart.x, y: extensionStart.y, type: "t" },
+          { x: extensionEnd.x, y: extensionEnd.y, type: "elbow" }
         ]
       };
       const allowed = this.extensionAllowedHouseIds(endpoint.start);
       if (this.roadIntersectsHouses(extensionRoad, this.manualHouses, allowed)) {
         return null;
       }
+      extensionAttachPoint = { x: extensionEnd.x, y: extensionEnd.y };
+      extensionAttachTangent = { x: endTangent.x, y: endTangent.y };
       secondaryRoad = extensionRoad;
       targetRoads = [extensionRoad];
     } else {
       return null;
     }
 
-    const drivewayAttach = secondaryRoad && endpoint
+    const drivewayAttach = secondaryRoad && extensionAttachPoint && extensionAttachTangent
       ? {
           roadId: secondaryRoad.id,
-          point: { x: endpoint.target.x, y: endpoint.target.y },
-          tangentX: endpoint.outward.x,
-          tangentY: endpoint.outward.y,
-          distance: Math.hypot(endpoint.target.x - house.x, endpoint.target.y - house.y)
+          point: { x: extensionAttachPoint.x, y: extensionAttachPoint.y },
+          tangentX: extensionAttachTangent.x,
+          tangentY: extensionAttachTangent.y,
+          distance: Math.hypot(extensionAttachPoint.x - house.x, extensionAttachPoint.y - house.y)
         }
       : this.findClosestAttachmentAvoidingRoadNodes(house, targetRoads);
     if (!drivewayAttach) {
@@ -837,7 +845,7 @@ export class V2App {
     }
     const stepLen = clamp(span / 18, 4, 10);
     const maxSteps = Math.ceil(span / stepLen) * 10;
-    const targetElev = this.terrain.elevationAt(start.x, start.y);
+    const targetElev = this.terrain.elevationAtRender(start.x, start.y);
     const points: Point[] = [{ x: start.x, y: start.y }];
     let cur = { x: start.x, y: start.y };
     for (let i = 0; i < maxSteps; i += 1) {
@@ -874,7 +882,7 @@ export class V2App {
       };
       const grad = this.terrainGradientAt(next.x, next.y, 16);
       if (grad) {
-        const elevErr = this.terrain.elevationAt(next.x, next.y) - targetElev;
+        const elevErr = this.terrain.elevationAtRender(next.x, next.y) - targetElev;
         const correction = clamp(elevErr / grad.magnitude, -stepLen * 0.8, stepLen * 0.8);
         next.x -= grad.normal.x * correction;
         next.y -= grad.normal.y * correction;
@@ -961,8 +969,8 @@ export class V2App {
   }
 
   private terrainGradientAt(x: number, y: number, step: number): { normal: Point; magnitude: number } | null {
-    const gx = this.terrain.elevationAt(x + step, y) - this.terrain.elevationAt(x - step, y);
-    const gy = this.terrain.elevationAt(x, y + step) - this.terrain.elevationAt(x, y - step);
+    const gx = this.terrain.elevationAtRender(x + step, y) - this.terrain.elevationAtRender(x - step, y);
+    const gy = this.terrain.elevationAtRender(x, y + step) - this.terrain.elevationAtRender(x, y - step);
     const gradNorm = Math.hypot(gx, gy);
     if (gradNorm <= 1e-8) {
       return null;
@@ -978,8 +986,8 @@ export class V2App {
   }
 
   private contourDirectionAt(x: number, y: number, step: number): Point {
-    const gx = this.terrain.elevationAt(x + step, y) - this.terrain.elevationAt(x - step, y);
-    const gy = this.terrain.elevationAt(x, y + step) - this.terrain.elevationAt(x, y - step);
+    const gx = this.terrain.elevationAtRender(x + step, y) - this.terrain.elevationAtRender(x - step, y);
+    const gy = this.terrain.elevationAtRender(x, y + step) - this.terrain.elevationAtRender(x, y - step);
     const contourX = -gy;
     const contourY = gx;
     const len = Math.hypot(contourX, contourY);
@@ -990,7 +998,7 @@ export class V2App {
   }
 
   private projectPointToNearestContour(point: Point): Point {
-    const contourLevels = 22;
+    const contourLevels = V2_SETTLEMENT_CONFIG.manualPlacement.contourLevels;
     const step = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackSampleStep;
     const sample = this.signedContourDistance(point.x, point.y, step, contourLevels);
     if (Math.abs(sample.grad) <= 1e-6) {
@@ -1008,8 +1016,8 @@ export class V2App {
     sampleStep: number,
     contourLevels: number
   ): { distance: number; grad: number; normal: Point } {
-    const gx = this.terrain.elevationAt(x + sampleStep, y) - this.terrain.elevationAt(x - sampleStep, y);
-    const gy = this.terrain.elevationAt(x, y + sampleStep) - this.terrain.elevationAt(x, y - sampleStep);
+    const gx = this.terrain.elevationAtRender(x + sampleStep, y) - this.terrain.elevationAtRender(x - sampleStep, y);
+    const gy = this.terrain.elevationAtRender(x, y + sampleStep) - this.terrain.elevationAtRender(x, y - sampleStep);
     const gradNorm = Math.hypot(gx, gy);
     if (gradNorm <= 1e-8) {
       return {
@@ -1019,7 +1027,7 @@ export class V2App {
       };
     }
     const grad = gradNorm / (2 * sampleStep);
-    const elev = this.terrain.elevationAt(x, y);
+    const elev = this.terrain.elevationAtRender(x, y);
     const eScaled = elev * contourLevels;
     const nearestScaled = Math.round(eScaled - 0.5) + 0.5;
     const nearestElev = nearestScaled / contourLevels;
@@ -1183,16 +1191,10 @@ export class V2App {
     for (let wy = startWY; wy <= viewMaxY + worldStep; wy += worldStep) {
       for (let wx = startWX; wx <= viewMaxX + worldStep; wx += worldStep) {
         const elevation = this.terrain.elevationAtRender(wx, wy);
-        const contour = Math.abs((elevation * 22) % 1 - 0.5);
 
         let r = lerp(177, 124, elevation);
         let g = lerp(207, 161, elevation);
         let b = lerp(155, 112, elevation);
-        if (contour < 0.055) {
-          r -= 17;
-          g -= 14;
-          b -= 11;
-        }
 
         ctx.fillStyle = `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
         const sx = Math.floor((wx - viewMinX) * this.zoom);
@@ -1201,6 +1203,142 @@ export class V2App {
         ctx.fillRect(sx, sy, size, size);
       }
     }
+
+    if (this.stage === 0 || this.manualPlacementMode) {
+      this.drawTerrainContours(ctx, viewMinX, viewMinY, viewMaxX, viewMaxY, worldStep);
+    }
+  }
+
+  private drawTerrainContours(
+    ctx: CanvasRenderingContext2D,
+    viewMinX: number,
+    viewMinY: number,
+    viewMaxX: number,
+    viewMaxY: number,
+    worldStep: number
+  ): void {
+    const contourLevels = V2_SETTLEMENT_CONFIG.manualPlacement.contourLevels;
+    const contourSetback = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackWorld;
+    const contourSampleStep = V2_SETTLEMENT_CONFIG.manualPlacement.contourSetbackSampleStep;
+    const startWX = Math.floor(viewMinX / worldStep) * worldStep;
+    const startWY = Math.floor(viewMinY / worldStep) * worldStep;
+    const contourField = (x: number, y: number): number => {
+      const scaled = this.terrain.elevationAtRender(x, y) * contourLevels;
+      const nearest = Math.round(scaled - 0.5) + 0.5;
+      return scaled - nearest;
+    };
+    const snapField = (x: number, y: number): number =>
+      Math.abs(this.signedContourDistance(x, y, contourSampleStep, contourLevels).distance) - contourSetback;
+    const showSnapGuides = this.manualPlacementMode && this.mouseCanvasX >= 0 && this.mouseCanvasY >= 0;
+    const hoverWorld = showSnapGuides ? this.screenToWorld(this.mouseCanvasX, this.mouseCanvasY) : null;
+    const contourGuideRadiusWorld = 320;
+    const snapGuideRadiusWorld = 280;
+    const contourMinX = hoverWorld ? hoverWorld.x - contourGuideRadiusWorld : viewMinX;
+    const contourMaxX = hoverWorld ? hoverWorld.x + contourGuideRadiusWorld : viewMaxX;
+    const contourMinY = hoverWorld ? hoverWorld.y - contourGuideRadiusWorld : viewMinY;
+    const contourMaxY = hoverWorld ? hoverWorld.y + contourGuideRadiusWorld : viewMaxY;
+    const snapMinX = hoverWorld ? hoverWorld.x - snapGuideRadiusWorld : 0;
+    const snapMaxX = hoverWorld ? hoverWorld.x + snapGuideRadiusWorld : 0;
+    const snapMinY = hoverWorld ? hoverWorld.y - snapGuideRadiusWorld : 0;
+    const snapMaxY = hoverWorld ? hoverWorld.y + snapGuideRadiusWorld : 0;
+
+    const contourPath = new Path2D();
+    const snapPath = new Path2D();
+    const interpolate = (a: Point, b: Point, va: number, vb: number): Point => {
+      const denom = va - vb;
+      const t = Math.abs(denom) <= 1e-6 ? 0.5 : clamp(va / denom, 0, 1);
+      return {
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t
+      };
+    };
+    const addCellSegments = (path: Path2D, v00: number, v10: number, v11: number, v01: number, p00: Point, p10: Point, p11: Point, p01: Point): void => {
+      const hits: Point[] = [];
+      if ((v00 <= 0 && v10 >= 0) || (v00 >= 0 && v10 <= 0)) {
+        hits.push(interpolate(p00, p10, v00, v10));
+      }
+      if ((v10 <= 0 && v11 >= 0) || (v10 >= 0 && v11 <= 0)) {
+        hits.push(interpolate(p10, p11, v10, v11));
+      }
+      if ((v11 <= 0 && v01 >= 0) || (v11 >= 0 && v01 <= 0)) {
+        hits.push(interpolate(p11, p01, v11, v01));
+      }
+      if ((v01 <= 0 && v00 >= 0) || (v01 >= 0 && v00 <= 0)) {
+        hits.push(interpolate(p01, p00, v01, v00));
+      }
+      if (hits.length < 2) {
+        return;
+      }
+      const drawSeg = (a: Point, b: Point): void => {
+        path.moveTo((a.x - viewMinX) * this.zoom, (a.y - viewMinY) * this.zoom);
+        path.lineTo((b.x - viewMinX) * this.zoom, (b.y - viewMinY) * this.zoom);
+      };
+      if (hits.length === 2 || hits.length === 3) {
+        drawSeg(hits[0], hits[1]);
+      } else {
+        drawSeg(hits[0], hits[1]);
+        drawSeg(hits[2], hits[3]);
+      }
+    };
+
+    for (let wy = startWY; wy <= viewMaxY; wy += worldStep) {
+      for (let wx = startWX; wx <= viewMaxX; wx += worldStep) {
+        const p00 = { x: wx, y: wy };
+        const p10 = { x: wx + worldStep, y: wy };
+        const p11 = { x: wx + worldStep, y: wy + worldStep };
+        const p01 = { x: wx, y: wy + worldStep };
+        const cellMinX = wx;
+        const cellMaxX = wx + worldStep;
+        const cellMinY = wy;
+        const cellMaxY = wy + worldStep;
+        const intersectsContourBounds =
+          cellMaxX >= contourMinX && cellMinX <= contourMaxX && cellMaxY >= contourMinY && cellMinY <= contourMaxY;
+        if (intersectsContourBounds) {
+          addCellSegments(
+            contourPath,
+            contourField(p00.x, p00.y),
+            contourField(p10.x, p10.y),
+            contourField(p11.x, p11.y),
+            contourField(p01.x, p01.y),
+            p00,
+            p10,
+            p11,
+            p01
+          );
+        }
+        if (showSnapGuides) {
+          const intersectsSnapBounds =
+            cellMaxX >= snapMinX && cellMinX <= snapMaxX && cellMaxY >= snapMinY && cellMinY <= snapMaxY;
+          if (intersectsSnapBounds) {
+            addCellSegments(
+              snapPath,
+              snapField(p00.x, p00.y),
+              snapField(p10.x, p10.y),
+              snapField(p11.x, p11.y),
+              snapField(p01.x, p01.y),
+              p00,
+              p10,
+              p11,
+              p01
+            );
+          }
+        }
+      }
+    }
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(42, 52, 55, 0.62)";
+    ctx.lineWidth = 1;
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "round";
+    ctx.stroke(contourPath);
+    if (showSnapGuides) {
+      ctx.strokeStyle = "rgba(78, 93, 98, 0.58)";
+      ctx.setLineDash([2, 3]);
+      ctx.stroke(snapPath);
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
   }
 
   private drawRoads(roads: RoadSegment[], viewMinX: number, viewMinY: number, alpha = 1, showPreviewHandles = false): void {
@@ -1225,7 +1363,7 @@ export class V2App {
     const ctx = this.ctx;
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.lineCap = "round";
+    ctx.lineCap = "butt";
     ctx.lineJoin = "round";
     ctx.strokeStyle = V2_RENDER_CONFIG.roadOutlineColor;
     ctx.lineWidth = (V2_SETTLEMENT_CONFIG.roads.width + V2_RENDER_CONFIG.roadOutlinePad) * this.zoom;
