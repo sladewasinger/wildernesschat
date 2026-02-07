@@ -13,6 +13,7 @@ export type Stage4ContinuityContext = {
   fieldSeed: number;
   terrain: V2TerrainSampler;
   roadCache: Map<string, RoadSegment[]>;
+  mergedRoadCache: Map<string, RoadSegment[]>;
 };
 
 type AddInterVillageConnectorsParams = {
@@ -31,11 +32,41 @@ type StepCandidate = {
   dirY: number;
 };
 
+type RawSegment = {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  ts: number[];
+};
+
+type EdgePiece = {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+};
+
+type GraphNode = {
+  x: number;
+  y: number;
+};
+
+type GraphEdge = {
+  a: number;
+  b: number;
+  length: number;
+  active: boolean;
+};
+
+const SPLIT_EPS = 1e-4;
+
 export const createStage4ContinuityContext = (planSeed: number, terrain: V2TerrainSampler): Stage4ContinuityContext => ({
   continuitySeed: hashString(`${planSeed}:v2:stage4:continuity`),
   fieldSeed: hashString(`${planSeed}:v2:stage4:continuity-field`),
   terrain,
-  roadCache: new Map<string, RoadSegment[]>()
+  roadCache: new Map<string, RoadSegment[]>(),
+  mergedRoadCache: new Map<string, RoadSegment[]>()
 });
 
 export const collectContinuityRoadsNearSite = (
@@ -44,9 +75,40 @@ export const collectContinuityRoadsNearSite = (
   planSeed: number,
   site: VillageSite,
   radius: number
-): RoadSegment[] => collectContinuityRoadsInBounds(context, siteContext, planSeed, site.x - radius, site.x + radius, site.y - radius, site.y + radius);
+): RoadSegment[] => collectRawContinuityRoadsInBounds(context, siteContext, planSeed, site.x - radius, site.x + radius, site.y - radius, site.y + radius);
 
 export const collectContinuityRoadsInBounds = (
+  context: Stage4ContinuityContext,
+  siteContext: SiteSelectionContext,
+  planSeed: number,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number
+): RoadSegment[] => {
+  const continuity = V2_SETTLEMENT_CONFIG.stage4.continuity;
+  const q = continuity.mergeCacheQuantize;
+  const cacheKey = `${Math.floor(minX / q)}:${Math.floor(maxX / q)}:${Math.floor(minY / q)}:${Math.floor(maxY / q)}`;
+  const cached = context.mergedRoadCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const raw = collectRawContinuityRoadsInBounds(context, siteContext, planSeed, minX, maxX, minY, maxY);
+  const merged = buildUnifiedContinuityRoads(raw);
+
+  context.mergedRoadCache.set(cacheKey, merged);
+  if (context.mergedRoadCache.size > 40) {
+    const oldest = context.mergedRoadCache.keys().next().value;
+    if (oldest) {
+      context.mergedRoadCache.delete(oldest);
+    }
+  }
+
+  return merged;
+};
+
+const collectRawContinuityRoadsInBounds = (
   context: Stage4ContinuityContext,
   siteContext: SiteSelectionContext,
   planSeed: number,
@@ -89,8 +151,6 @@ export const collectContinuityRoadsInBounds = (
 };
 
 export const addInterVillageConnectors = ({ site, roads, continuityRoads }: AddInterVillageConnectorsParams): number => {
-  // Stage 4 now links villages by emitting village-seeded continuity roads from each trunk endpoint.
-  // Connector metric reflects how many continuity spines belong to this village and are visible nearby.
   const prefix = `rvc-${site.id}-`;
   let connected = 0;
   for (const road of continuityRoads) {
@@ -282,6 +342,412 @@ const pickFeasibleStep = (
   }
 
   return null;
+};
+
+const buildUnifiedContinuityRoads = (roads: RoadSegment[]): RoadSegment[] => {
+  if (roads.length === 0) {
+    return roads;
+  }
+
+  const continuity = V2_SETTLEMENT_CONFIG.stage4.continuity;
+  const segments = buildRawSegments(roads);
+  splitSegmentsAtIntersections(segments, continuity.graphEndpointSnapRadius);
+  const pieces = buildEdgePieces(segments, continuity.graphMinEdgeLength);
+  if (pieces.length === 0) {
+    return [];
+  }
+
+  const graph = buildWeldedGraph(pieces, continuity.graphNodeSnapRadius);
+  pruneShortLeafEdges(graph.nodes.length, graph.edges, continuity.graphStubPruneLength);
+  const chains = extractGraphChains(graph.nodes, graph.edges);
+
+  const merged: RoadSegment[] = [];
+  for (let i = 0; i < chains.length; i += 1) {
+    const points = chains[i].map((nodeIndex) => ({ x: graph.nodes[nodeIndex].x, y: graph.nodes[nodeIndex].y }));
+    if (points.length < 2 || polylineLength(points) < continuity.graphMinEdgeLength) {
+      continue;
+    }
+    merged.push({
+      id: `rvcg-${i}`,
+      className: "branch",
+      width: V2_SETTLEMENT_CONFIG.roads.width,
+      points
+    });
+  }
+
+  return merged;
+};
+
+const buildRawSegments = (roads: RoadSegment[]): RawSegment[] => {
+  const segments: RawSegment[] = [];
+  for (const road of roads) {
+    for (let i = 1; i < road.points.length; i += 1) {
+      const a = road.points[i - 1];
+      const b = road.points[i];
+      if (Math.hypot(b.x - a.x, b.y - a.y) <= SPLIT_EPS) {
+        continue;
+      }
+      segments.push({
+        ax: a.x,
+        ay: a.y,
+        bx: b.x,
+        by: b.y,
+        ts: [0, 1]
+      });
+    }
+  }
+  return segments;
+};
+
+const splitSegmentsAtIntersections = (segments: RawSegment[], endpointSnapRadius: number): void => {
+  for (let i = 0; i < segments.length; i += 1) {
+    const a = segments[i];
+    for (let j = i + 1; j < segments.length; j += 1) {
+      const b = segments[j];
+
+      const cross = strictSegmentIntersection(a, b);
+      if (cross) {
+        addSplitT(a, cross.t);
+        addSplitT(b, cross.u);
+      }
+
+      snapSegmentEndpointIntoOther(a.ax, a.ay, b, endpointSnapRadius);
+      snapSegmentEndpointIntoOther(a.bx, a.by, b, endpointSnapRadius);
+      snapSegmentEndpointIntoOther(b.ax, b.ay, a, endpointSnapRadius);
+      snapSegmentEndpointIntoOther(b.bx, b.by, a, endpointSnapRadius);
+    }
+  }
+};
+
+const strictSegmentIntersection = (a: RawSegment, b: RawSegment): { t: number; u: number } | null => {
+  const rX = a.bx - a.ax;
+  const rY = a.by - a.ay;
+  const sX = b.bx - b.ax;
+  const sY = b.by - b.ay;
+  const denom = rX * sY - rY * sX;
+  if (Math.abs(denom) <= 1e-9) {
+    return null;
+  }
+
+  const qmpX = b.ax - a.ax;
+  const qmpY = b.ay - a.ay;
+  const t = (qmpX * sY - qmpY * sX) / denom;
+  const u = (qmpX * rY - qmpY * rX) / denom;
+
+  if (t <= SPLIT_EPS || t >= 1 - SPLIT_EPS || u <= SPLIT_EPS || u >= 1 - SPLIT_EPS) {
+    return null;
+  }
+
+  return { t, u };
+};
+
+const snapSegmentEndpointIntoOther = (px: number, py: number, target: RawSegment, radius: number): void => {
+  const projection = projectParamToSegment(px, py, target.ax, target.ay, target.bx, target.by);
+  if (!projection) {
+    return;
+  }
+  if (projection.distance > radius) {
+    return;
+  }
+  if (projection.t <= SPLIT_EPS || projection.t >= 1 - SPLIT_EPS) {
+    return;
+  }
+  addSplitT(target, projection.t);
+};
+
+const projectParamToSegment = (
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): { t: number; distance: number } | null => {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const lenSq = vx * vx + vy * vy;
+  if (lenSq <= 1e-9) {
+    return null;
+  }
+  const t = clamp(((px - ax) * vx + (py - ay) * vy) / lenSq, 0, 1);
+  const qx = ax + vx * t;
+  const qy = ay + vy * t;
+  return {
+    t,
+    distance: Math.hypot(px - qx, py - qy)
+  };
+};
+
+const addSplitT = (segment: RawSegment, t: number): void => {
+  if (t <= SPLIT_EPS || t >= 1 - SPLIT_EPS) {
+    return;
+  }
+  for (const existing of segment.ts) {
+    if (Math.abs(existing - t) <= 1e-4) {
+      return;
+    }
+  }
+  segment.ts.push(t);
+};
+
+const buildEdgePieces = (segments: RawSegment[], minLength: number): EdgePiece[] => {
+  const pieces: EdgePiece[] = [];
+
+  for (const segment of segments) {
+    const ts = Array.from(segment.ts).sort((a, b) => a - b);
+    for (let i = 1; i < ts.length; i += 1) {
+      const t0 = ts[i - 1];
+      const t1 = ts[i];
+      const a = pointAlong(segment, t0);
+      const b = pointAlong(segment, t1);
+      if (Math.hypot(b.x - a.x, b.y - a.y) < minLength) {
+        continue;
+      }
+      pieces.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y });
+    }
+  }
+
+  return pieces;
+};
+
+const pointAlong = (segment: RawSegment, t: number): Point => ({
+  x: lerp(segment.ax, segment.bx, t),
+  y: lerp(segment.ay, segment.by, t)
+});
+
+const buildWeldedGraph = (pieces: EdgePiece[], nodeSnapRadius: number): { nodes: GraphNode[]; edges: GraphEdge[] } => {
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
+  const edgeSeen = new Set<string>();
+  const grid = new Map<string, number[]>();
+
+  const getNode = (x: number, y: number): number => {
+    const gx = Math.floor(x / nodeSnapRadius);
+    const gy = Math.floor(y / nodeSnapRadius);
+    for (let oy = -1; oy <= 1; oy += 1) {
+      for (let ox = -1; ox <= 1; ox += 1) {
+        const key = `${gx + ox},${gy + oy}`;
+        const list = grid.get(key);
+        if (!list) {
+          continue;
+        }
+        for (const nodeIndex of list) {
+          const node = nodes[nodeIndex];
+          if (Math.hypot(node.x - x, node.y - y) <= nodeSnapRadius) {
+            return nodeIndex;
+          }
+        }
+      }
+    }
+
+    const nodeIndex = nodes.length;
+    nodes.push({ x, y });
+    const homeKey = `${gx},${gy}`;
+    const home = grid.get(homeKey);
+    if (home) {
+      home.push(nodeIndex);
+    } else {
+      grid.set(homeKey, [nodeIndex]);
+    }
+    return nodeIndex;
+  };
+
+  for (const piece of pieces) {
+    const a = getNode(piece.ax, piece.ay);
+    const b = getNode(piece.bx, piece.by);
+    if (a === b) {
+      continue;
+    }
+    const low = a < b ? a : b;
+    const high = a < b ? b : a;
+    const key = `${low}|${high}`;
+    if (edgeSeen.has(key)) {
+      continue;
+    }
+    edgeSeen.add(key);
+    edges.push({
+      a: low,
+      b: high,
+      length: Math.hypot(nodes[high].x - nodes[low].x, nodes[high].y - nodes[low].y),
+      active: true
+    });
+  }
+
+  return { nodes, edges };
+};
+
+const pruneShortLeafEdges = (nodeCount: number, edges: GraphEdge[], stubLength: number): void => {
+  for (;;) {
+    const degree = new Array<number>(nodeCount).fill(0);
+    for (const edge of edges) {
+      if (!edge.active) {
+        continue;
+      }
+      degree[edge.a] += 1;
+      degree[edge.b] += 1;
+    }
+
+    let removedAny = false;
+    for (const edge of edges) {
+      if (!edge.active || edge.length > stubLength) {
+        continue;
+      }
+      const aLeaf = degree[edge.a] === 1 && degree[edge.b] >= 2;
+      const bLeaf = degree[edge.b] === 1 && degree[edge.a] >= 2;
+      if (!aLeaf && !bLeaf) {
+        continue;
+      }
+      edge.active = false;
+      removedAny = true;
+    }
+
+    if (!removedAny) {
+      break;
+    }
+  }
+};
+
+const extractGraphChains = (nodes: GraphNode[], edges: GraphEdge[]): number[][] => {
+  const adjacency = new Map<number, number[]>();
+  const activeEdgeIndices: number[] = [];
+  const degree = new Array<number>(nodes.length).fill(0);
+
+  for (let i = 0; i < edges.length; i += 1) {
+    const edge = edges[i];
+    if (!edge.active) {
+      continue;
+    }
+    activeEdgeIndices.push(i);
+    degree[edge.a] += 1;
+    degree[edge.b] += 1;
+    addAdjacency(adjacency, edge.a, i);
+    addAdjacency(adjacency, edge.b, i);
+  }
+
+  const visited = new Set<number>();
+  const chains: number[][] = [];
+
+  for (let node = 0; node < nodes.length; node += 1) {
+    if (degree[node] === 0 || degree[node] === 2) {
+      continue;
+    }
+    const incident = adjacency.get(node) ?? [];
+    for (const edgeIndex of incident) {
+      if (visited.has(edgeIndex)) {
+        continue;
+      }
+      const chain = walkChain(node, edgeIndex, edges, adjacency, degree, visited);
+      if (chain.length >= 2) {
+        chains.push(chain);
+      }
+    }
+  }
+
+  for (const edgeIndex of activeEdgeIndices) {
+    if (visited.has(edgeIndex)) {
+      continue;
+    }
+    const edge = edges[edgeIndex];
+    const loop = walkLoop(edge.a, edgeIndex, edges, adjacency, visited);
+    if (loop.length >= 2) {
+      chains.push(loop);
+    }
+  }
+
+  return chains;
+};
+
+const addAdjacency = (map: Map<number, number[]>, node: number, edgeIndex: number): void => {
+  const list = map.get(node);
+  if (list) {
+    list.push(edgeIndex);
+  } else {
+    map.set(node, [edgeIndex]);
+  }
+};
+
+const walkChain = (
+  startNode: number,
+  startEdgeIndex: number,
+  edges: GraphEdge[],
+  adjacency: Map<number, number[]>,
+  degree: number[],
+  visited: Set<number>
+): number[] => {
+  const path: number[] = [startNode];
+  let currentNode = startNode;
+  let edgeIndex = startEdgeIndex;
+
+  for (;;) {
+    if (visited.has(edgeIndex)) {
+      break;
+    }
+    visited.add(edgeIndex);
+    const edge = edges[edgeIndex];
+    const nextNode = edge.a === currentNode ? edge.b : edge.a;
+    path.push(nextNode);
+
+    if (degree[nextNode] !== 2) {
+      break;
+    }
+
+    const incident = adjacency.get(nextNode) ?? [];
+    let nextEdgeIndex = -1;
+    for (const candidate of incident) {
+      if (!visited.has(candidate)) {
+        nextEdgeIndex = candidate;
+        break;
+      }
+    }
+    if (nextEdgeIndex < 0) {
+      break;
+    }
+
+    currentNode = nextNode;
+    edgeIndex = nextEdgeIndex;
+  }
+
+  return path;
+};
+
+const walkLoop = (
+  startNode: number,
+  startEdgeIndex: number,
+  edges: GraphEdge[],
+  adjacency: Map<number, number[]>,
+  visited: Set<number>
+): number[] => {
+  const path: number[] = [startNode];
+  let currentNode = startNode;
+  let edgeIndex = startEdgeIndex;
+
+  for (;;) {
+    if (visited.has(edgeIndex)) {
+      break;
+    }
+    visited.add(edgeIndex);
+    const edge = edges[edgeIndex];
+    const nextNode = edge.a === currentNode ? edge.b : edge.a;
+    path.push(nextNode);
+
+    const incident = adjacency.get(nextNode) ?? [];
+    let nextEdgeIndex = -1;
+    for (const candidate of incident) {
+      if (!visited.has(candidate)) {
+        nextEdgeIndex = candidate;
+        break;
+      }
+    }
+
+    if (nextEdgeIndex < 0 || nextNode === startNode) {
+      break;
+    }
+
+    currentNode = nextNode;
+    edgeIndex = nextEdgeIndex;
+  }
+
+  return path;
 };
 
 const normalizeWithFallback = (x: number, y: number, fallbackX: number, fallbackY: number): { x: number; y: number } => {

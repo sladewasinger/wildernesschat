@@ -122,6 +122,11 @@ export const V2_SETTLEMENT_CONFIG = {
       maxTurnRadPerStep: 0.42,
       candidateTurnTries: 3,
       candidateTurnStepRad: 0.24,
+      mergeCacheQuantize: 96,
+      graphEndpointSnapRadius: 16,
+      graphNodeSnapRadius: 10,
+      graphMinEdgeLength: 6,
+      graphStubPruneLength: 72,
       maxSlope: 0.11
     },
     attachments: {
