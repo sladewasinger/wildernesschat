@@ -1,0 +1,21 @@
+export const V2_STAGE_MIN = 0;
+export const V2_STAGE_MAX = 3;
+
+export const V2_VIEW_CONFIG = {
+  defaultZoom: 1.45,
+  minZoom: 0.65,
+  maxZoom: 2.8,
+  keyZoomStep: 1.12,
+  wheelZoomStep: 1.1,
+  terrainWorldStep: 4
+} as const;
+
+export const V2_SETTLEMENT_CONFIG = {
+  siteCellSize: 620,
+  minSiteScore: 0.54,
+  houseScale: 2.4,
+  houseSpacingPadding: 12,
+  houseRoadClearance: 12,
+  branchRoadHouseClearance: 11,
+  shortcutRoadHouseClearance: 10
+} as const;

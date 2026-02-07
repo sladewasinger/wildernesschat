@@ -1,5 +1,6 @@
 import { clamp, lerp } from "../util/math";
 import { hashCoords, hashString, hashToUnit } from "../gen/hash";
+import { V2_SETTLEMENT_CONFIG, V2_STAGE_MAX, V2_STAGE_MIN } from "./config";
 import { V2TerrainSampler } from "./terrain";
 import { House, Point, RoadSegment, VillagePlan, VillageSite } from "./types";
 
@@ -32,8 +33,8 @@ export class V2SettlementGenerator {
   private readonly terrain: V2TerrainSampler;
   private readonly siteCache = new Map<string, VillageSite | null>();
   private readonly planCache = new Map<string, VillagePlan>();
-  private readonly siteCellSize = 620;
-  private readonly minSiteScore = 0.54;
+  private readonly siteCellSize = V2_SETTLEMENT_CONFIG.siteCellSize;
+  private readonly minSiteScore = V2_SETTLEMENT_CONFIG.minSiteScore;
 
   constructor(seed: string, terrain: V2TerrainSampler) {
     this.siteSeed = hashString(`${seed}:v2:sites`);
@@ -64,7 +65,7 @@ export class V2SettlementGenerator {
   }
 
   buildVillagePlan(site: VillageSite, stage: number): VillagePlan {
-    const stageValue = clamp(Math.floor(stage), 0, 3);
+    const stageValue = clamp(Math.floor(stage), V2_STAGE_MIN, V2_STAGE_MAX);
     const cacheKey = `${site.id}:${stageValue}`;
     const cached = this.planCache.get(cacheKey);
     if (cached) {
@@ -192,8 +193,8 @@ export class V2SettlementGenerator {
     const offset = trunk.width * 0.5 + 15;
     const x = sample.x + normalX * side * offset;
     const y = sample.y + normalY * side * offset;
-    const width = lerp(12, 18, hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 97)));
-    const depth = lerp(8, 13, hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 101)));
+    const width = lerp(12, 18, hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 97))) * V2_SETTLEMENT_CONFIG.houseScale;
+    const depth = lerp(8, 13, hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 101))) * V2_SETTLEMENT_CONFIG.houseScale;
     const angle = Math.atan2(sample.tangentY, sample.tangentX) + (hashToUnit(hashCoords(this.planSeed, site.cellX, site.cellY, 103)) * 2 - 1) * 0.07;
 
     const house: House = {
@@ -264,8 +265,8 @@ export class V2SettlementGenerator {
           continue;
         }
 
-        const width = lerp(10, 18, hashToUnit(hashCoords(localHash, 11, 13, 151)));
-        const depth = lerp(7, 13, hashToUnit(hashCoords(localHash, 17, 19, 157)));
+        const width = lerp(10, 18, hashToUnit(hashCoords(localHash, 11, 13, 151))) * V2_SETTLEMENT_CONFIG.houseScale;
+        const depth = lerp(7, 13, hashToUnit(hashCoords(localHash, 17, 19, 157))) * V2_SETTLEMENT_CONFIG.houseScale;
         const angle = Math.atan2(sample.tangentY, sample.tangentX) + (hashToUnit(hashCoords(localHash, 23, 29, 163)) * 2 - 1) * 0.09;
         const house: House = {
           id: `h-${site.id}-${road.id}-${slot}-${side}`,
@@ -276,7 +277,7 @@ export class V2SettlementGenerator {
           angle,
           tone: hashToUnit(hashCoords(localHash, 31, 37, 167))
         };
-        const roadClearance = Math.max(8, Math.max(width, depth) * 0.88);
+        const roadClearance = Math.max(V2_SETTLEMENT_CONFIG.houseRoadClearance, Math.max(width, depth) * 0.88);
         if (this.distanceToRoadsExcludingRoad(x, y, roads, road.id) < roadClearance) {
           continue;
         }
@@ -326,7 +327,7 @@ export class V2SettlementGenerator {
       if (!this.isRoadUsable(branch.points, roads, 6.8)) {
         continue;
       }
-      if (this.isRoadNearHouses(branch.points, houses, 9)) {
+      if (this.isRoadNearHouses(branch.points, houses, V2_SETTLEMENT_CONFIG.branchRoadHouseClearance)) {
         continue;
       }
 
@@ -381,7 +382,7 @@ export class V2SettlementGenerator {
         if (!this.isRoadUsable(shortcut.points, roads, 6.2)) {
           continue;
         }
-        if (this.isRoadNearHouses(shortcut.points, houses, 8)) {
+        if (this.isRoadNearHouses(shortcut.points, houses, V2_SETTLEMENT_CONFIG.shortcutRoadHouseClearance)) {
           continue;
         }
 
@@ -492,7 +493,7 @@ export class V2SettlementGenerator {
     const houseRadius = Math.hypot(house.width, house.depth) * 0.6;
     for (const other of existing) {
       const otherRadius = Math.hypot(other.width, other.depth) * 0.6;
-      if (Math.hypot(house.x - other.x, house.y - other.y) < houseRadius + otherRadius + 9) {
+      if (Math.hypot(house.x - other.x, house.y - other.y) < houseRadius + otherRadius + V2_SETTLEMENT_CONFIG.houseSpacingPadding) {
         return false;
       }
     }
@@ -505,10 +506,13 @@ export class V2SettlementGenerator {
   }
 
   private isRoadNearHouses(points: Point[], houses: House[], clearance: number): boolean {
-    for (const point of points) {
+    for (let i = 1; i < points.length; i += 1) {
+      const a = points[i - 1];
+      const b = points[i];
       for (const house of houses) {
         const houseRadius = Math.hypot(house.width, house.depth) * 0.58;
-        if (Math.hypot(point.x - house.x, point.y - house.y) < houseRadius + clearance) {
+        const distance = this.distanceToSegment(house.x, house.y, a.x, a.y, b.x, b.y);
+        if (distance < houseRadius + clearance) {
           return true;
         }
       }

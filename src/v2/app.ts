@@ -1,6 +1,7 @@
 import { clamp, floorDiv, lerp } from "../util/math";
 import { V2SettlementGenerator } from "./generator";
 import { V2TerrainSampler } from "./terrain";
+import { V2_STAGE_MAX, V2_STAGE_MIN, V2_VIEW_CONFIG } from "./config";
 import { House, Point, RoadSegment } from "./types";
 
 type InputState = {
@@ -29,8 +30,8 @@ export class V2App {
   private playerX = 0;
   private playerY = 0;
   private lastTime = 0;
-  private stage = 2;
-  private zoom = 1.45;
+  private stage: number = 2;
+  private zoom: number = V2_VIEW_CONFIG.defaultZoom;
 
   constructor(canvas: HTMLCanvasElement, hud: HTMLElement, seed: string, initialStage: number, initialZoom: number) {
     this.canvas = canvas;
@@ -38,8 +39,8 @@ export class V2App {
     this.seed = seed;
     this.terrain = new V2TerrainSampler(seed);
     this.generator = new V2SettlementGenerator(seed, this.terrain);
-    this.stage = clamp(initialStage | 0, 0, 3);
-    this.zoom = clamp(initialZoom, 0.65, 2.8);
+    this.stage = clamp(initialStage | 0, V2_STAGE_MIN, V2_STAGE_MAX);
+    this.zoom = clamp(initialZoom, V2_VIEW_CONFIG.minZoom, V2_VIEW_CONFIG.maxZoom);
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
@@ -74,10 +75,14 @@ export class V2App {
     if (event.key === "2") this.stage = 1;
     if (event.key === "3") this.stage = 2;
     if (event.key === "4") this.stage = 3;
-    if (event.key === "]") this.stage = clamp(this.stage + 1, 0, 3);
-    if (event.key === "[") this.stage = clamp(this.stage - 1, 0, 3);
-    if (event.key === "=" || event.key === "+") this.zoom = clamp(this.zoom * 1.12, 0.65, 2.8);
-    if (event.key === "-" || event.key === "_") this.zoom = clamp(this.zoom / 1.12, 0.65, 2.8);
+    if (event.key === "]") this.stage = clamp(this.stage + 1, V2_STAGE_MIN, V2_STAGE_MAX);
+    if (event.key === "[") this.stage = clamp(this.stage - 1, V2_STAGE_MIN, V2_STAGE_MAX);
+    if (event.key === "=" || event.key === "+") {
+      this.zoom = clamp(this.zoom * V2_VIEW_CONFIG.keyZoomStep, V2_VIEW_CONFIG.minZoom, V2_VIEW_CONFIG.maxZoom);
+    }
+    if (event.key === "-" || event.key === "_") {
+      this.zoom = clamp(this.zoom / V2_VIEW_CONFIG.keyZoomStep, V2_VIEW_CONFIG.minZoom, V2_VIEW_CONFIG.maxZoom);
+    }
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -90,9 +95,9 @@ export class V2App {
   private readonly onWheel = (event: WheelEvent): void => {
     event.preventDefault();
     if (event.deltaY < 0) {
-      this.zoom = clamp(this.zoom * 1.1, 0.65, 4);
+      this.zoom = clamp(this.zoom * V2_VIEW_CONFIG.wheelZoomStep, V2_VIEW_CONFIG.minZoom, V2_VIEW_CONFIG.maxZoom);
     } else if (event.deltaY > 0) {
-      this.zoom = clamp(this.zoom / 1.1, 0.65, 4);
+      this.zoom = clamp(this.zoom / V2_VIEW_CONFIG.wheelZoomStep, V2_VIEW_CONFIG.minZoom, V2_VIEW_CONFIG.maxZoom);
     }
   };
 
@@ -170,13 +175,13 @@ export class V2App {
       `Player px: ${this.playerX.toFixed(1)}, ${this.playerY.toFixed(1)}`,
       `Chunk-ish: ${floorDiv(this.playerX, 320)}, ${floorDiv(this.playerY, 320)}`,
       `Terrain: elev=${terrain.toFixed(3)} slope=${slope.toFixed(3)}`,
-      "Contour grid: 4 world units",
+      `Contour grid: ${V2_VIEW_CONFIG.terrainWorldStep} world units`,
       `Visible sites: ${sites.length}`
     ].join("\n");
   }
 
   private drawTerrain(ctx: CanvasRenderingContext2D, width: number, height: number, viewMinX: number, viewMinY: number): void {
-    const worldStep = 4;
+    const worldStep = V2_VIEW_CONFIG.terrainWorldStep;
     const viewMaxX = viewMinX + width / this.zoom;
     const viewMaxY = viewMinY + height / this.zoom;
     const startWX = Math.floor(viewMinX / worldStep) * worldStep;

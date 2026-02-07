@@ -99,6 +99,8 @@ This project uses deterministic procedural generation with clear module boundari
 
 ## Experimental Sandbox
 
+- `src/v2/config.ts`
+  - Centralized V2 constants (zoom limits, contour sampling step, stage bounds, settlement sizing/clearances).
 - `src/v2/terrain.ts`
   - Terrain-only elevation/slope prototype sampler (no water dependency).
 - `src/v2/generator.ts`

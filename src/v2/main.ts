@@ -1,5 +1,6 @@
 import "./styles.css";
 import { V2App } from "./app";
+import { V2_VIEW_CONFIG } from "./config";
 
 const run = (): void => {
   const canvas = document.querySelector<HTMLCanvasElement>("#v2-canvas");
@@ -11,8 +12,14 @@ const run = (): void => {
   const params = new URLSearchParams(window.location.search);
   const seed = params.get("seed") ?? "v2-seed-001";
   const stage = Number(params.get("stage") ?? "2");
-  const zoom = Number(params.get("zoom") ?? "1.45");
-  const app = new V2App(canvas, hud, seed, Number.isFinite(stage) ? stage : 2, Number.isFinite(zoom) ? zoom : 1.45);
+  const zoom = Number(params.get("zoom") ?? String(V2_VIEW_CONFIG.defaultZoom));
+  const app = new V2App(
+    canvas,
+    hud,
+    seed,
+    Number.isFinite(stage) ? stage : 2,
+    Number.isFinite(zoom) ? zoom : V2_VIEW_CONFIG.defaultZoom
+  );
   app.start();
 };
 

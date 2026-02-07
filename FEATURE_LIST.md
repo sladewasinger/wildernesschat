@@ -191,6 +191,7 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Implement anchor-house + long-trunk-road stage.
 - [x] Implement iterative house growth stage off trunk roads.
 - [x] Implement Y-branch + shortcut stage for organic local variation.
+- [x] Add V2 centralized tuning constants for zoom/contour/sizing/clearance controls.
 - [ ] Promote validated V2 systems into main pipeline incrementally.
 
 ## Progress Checklist
