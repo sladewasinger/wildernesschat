@@ -407,6 +407,7 @@ export class V2App {
       ...road,
       id,
       points: road.points.map((p) => ({ x: p.x, y: p.y })),
+      renderPoints: road.renderPoints ? road.renderPoints.map((p) => ({ x: p.x, y: p.y })) : null,
       bezierDebug: road.bezierDebug
         ? road.bezierDebug.map((curve) => ({
             p0: { x: curve.p0.x, y: curve.p0.y },
@@ -896,11 +897,12 @@ export class V2App {
   private drawRoads(roads: RoadSegment[], viewMinX: number, viewMinY: number, alpha = 1, showPreviewHandles = false): void {
     const path = new Path2D();
     for (const road of roads) {
-      if (road.points.length < 2) {
+      const drawPoints = road.renderPoints ?? road.points;
+      if (drawPoints.length < 2) {
         continue;
       }
-      for (let i = 0; i < road.points.length; i += 1) {
-        const p = road.points[i];
+      for (let i = 0; i < drawPoints.length; i += 1) {
+        const p = drawPoints[i];
         const x = (p.x - viewMinX) * this.zoom;
         const y = (p.y - viewMinY) * this.zoom;
         if (i === 0) {

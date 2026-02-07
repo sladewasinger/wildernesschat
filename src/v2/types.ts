@@ -17,6 +17,7 @@ export type RoadSegment = {
   className: RoadClass;
   width: number;
   points: Point[];
+  renderPoints?: Point[] | null;
   bezierDebug?: CubicBezierDebug[] | null;
 };
 

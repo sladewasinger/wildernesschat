@@ -160,15 +160,24 @@ export const createManualRoadBetweenHouses = (
     return null;
   }
 
-  const points = smoothRoadPath(corridor);
+  const interior = corridor.slice(1, -1);
+  const points = dedupeRoadPoints([fromFront, fromRoadEnd, ...interior, toRoadEnd, toFront]);
   if (points.length < 2) {
     return null;
   }
+  const cornerBIndex = points.length - 2;
+  const renderPoints = filletPolylineCorners(
+    points,
+    [1, cornerBIndex],
+    V2_SETTLEMENT_CONFIG.manualPlacement.seedDrivewayFilletRadius,
+    7
+  );
   return {
     id,
     className: "trunk",
     width: V2_SETTLEMENT_CONFIG.roads.width,
-    points
+    points,
+    renderPoints
   };
 };
 
@@ -961,6 +970,93 @@ const traceContourBestFitPath = (start: Point, end: Point, terrain: V2TerrainSam
   // Deterministic fallback if tracing stalls: still return a usable connector.
   points.push({ x: end.x, y: end.y });
   return dedupeRoadPoints(points);
+};
+
+const filletPolylineCorners = (points: Point[], cornerIndices: number[], radius: number, arcSteps: number): Point[] => {
+  let out = points.map((p) => ({ x: p.x, y: p.y }));
+  const sorted = [...cornerIndices].sort((a, b) => b - a);
+  for (const cornerIndex of sorted) {
+    out = filletSingleCorner(out, cornerIndex, radius, arcSteps);
+  }
+  return dedupeRoadPoints(out);
+};
+
+const filletSingleCorner = (points: Point[], cornerIndex: number, radius: number, arcSteps: number): Point[] => {
+  if (cornerIndex <= 0 || cornerIndex >= points.length - 1) {
+    return points;
+  }
+  const prev = points[cornerIndex - 1];
+  const corner = points[cornerIndex];
+  const next = points[cornerIndex + 1];
+  const fromPrev = normalizeDirection(corner.x - prev.x, corner.y - prev.y);
+  const toNext = normalizeDirection(next.x - corner.x, next.y - corner.y);
+  if (!fromPrev || !toNext) {
+    return points;
+  }
+  const u = { x: -fromPrev.x, y: -fromPrev.y };
+  const v = { x: toNext.x, y: toNext.y };
+  const phi = Math.acos(clamp(u.x * v.x + u.y * v.y, -1, 1));
+  if (!Number.isFinite(phi) || phi <= 0.08 || phi >= Math.PI - 0.08) {
+    return points;
+  }
+
+  const lenIn = Math.hypot(corner.x - prev.x, corner.y - prev.y);
+  const lenOut = Math.hypot(next.x - corner.x, next.y - corner.y);
+  const tangentDist = Math.min(
+    lenIn * 0.42,
+    lenOut * 0.42,
+    Math.max(1.2, radius / Math.tan(phi * 0.5))
+  );
+  if (!Number.isFinite(tangentDist) || tangentDist <= 0.8) {
+    return points;
+  }
+
+  const pStart = {
+    x: corner.x + u.x * tangentDist,
+    y: corner.y + u.y * tangentDist
+  };
+  const pEnd = {
+    x: corner.x + v.x * tangentDist,
+    y: corner.y + v.y * tangentDist
+  };
+
+  const bisector = normalizeDirection(u.x + v.x, u.y + v.y);
+  if (!bisector) {
+    return points;
+  }
+  const arcRadius = tangentDist * Math.tan(phi * 0.5);
+  const centerDist = arcRadius / Math.sin(phi * 0.5);
+  const center = {
+    x: corner.x + bisector.x * centerDist,
+    y: corner.y + bisector.y * centerDist
+  };
+
+  let a0 = Math.atan2(pStart.y - center.y, pStart.x - center.x);
+  let a1 = Math.atan2(pEnd.y - center.y, pEnd.x - center.x);
+  const turn = fromPrev.x * toNext.y - fromPrev.y * toNext.x;
+  if (turn > 0) {
+    while (a1 <= a0) {
+      a1 += Math.PI * 2;
+    }
+  } else {
+    while (a1 >= a0) {
+      a1 -= Math.PI * 2;
+    }
+  }
+  const steps = Math.max(2, arcSteps);
+  const arc: Point[] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    const a = a0 + (a1 - a0) * t;
+    arc.push({
+      x: center.x + Math.cos(a) * arcRadius,
+      y: center.y + Math.sin(a) * arcRadius
+    });
+  }
+
+  const before = points.slice(0, cornerIndex);
+  const after = points.slice(cornerIndex + 1);
+  return dedupeRoadPoints([...before, ...arc, ...after]);
 };
 
 const houseFrontPoint = (house: House): Point => {

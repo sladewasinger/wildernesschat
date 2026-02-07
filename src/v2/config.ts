@@ -41,6 +41,7 @@ export const V2_SETTLEMENT_CONFIG = {
     drivewayStubLength: 9,
     contourSetbackWorld: 20,
     contourSetbackSampleStep: 8,
+    seedDrivewayFilletRadius: 10,
     sideBackAlignmentThreshold: 0.2,
     bridgeMinGap: 44,
     bridgeSameRoadMinGap: 168,
