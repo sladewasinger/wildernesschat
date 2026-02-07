@@ -18,14 +18,22 @@ export const localBranchRoadId = (villageId: string, spokeIndex: number, branchI
   return `rlb-${villageId}-${spokeIndex}-${branchIndex}`;
 };
 
-export const localLoopRoadId = (villageId: string): string => {
-  return `rlloop-${villageId}`;
-};
-
 export const parcelIdForRoadPosition = (roadId: string, segmentIndex: number, stepIndex: number, side: -1 | 1): string => {
   return `p-${roadId}-${segmentIndex}-${stepIndex}-${side}`;
 };
 
 export const houseIdForParcel = (parcelId: string): string => {
   return `h-${parcelId}`;
+};
+
+export const roadNodeId = (roadId: string, position: "start" | "end"): string => {
+  return `rn-${roadId}-${position}`;
+};
+
+export const bridgeNodeId = (roadId: string, bridgeIndex: number): string => {
+  return `rnb-${roadId}-${bridgeIndex}`;
+};
+
+export const roadGraphEdgeId = (roadId: string): string => {
+  return `re-${roadId}`;
 };

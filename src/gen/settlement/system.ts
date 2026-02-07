@@ -1,14 +1,15 @@
 import { WorldConfig } from "../config";
+import { SettlementLayoutBuilder } from "../layout/settlement-layout-builder";
 import { hashString } from "../hash";
 import { TerrainSampler } from "../terrain";
-import { pointInRect, regionKey, roadIntersectsBounds, roadMidpoint } from "./geometry";
+import { pointInRect, regionKey, roadIntersectsBounds } from "./geometry";
 import { HouseGenerator } from "./house-generator";
 import { ParcelGenerator } from "./parcel-generator";
 import { RoadGenerator } from "./road-generator";
-import { SettlementFeatures } from "./types";
+import { SettlementFeatures, SettlementLayout } from "./types";
 import { VillageGenerator } from "./village-generator";
 
-type RegionFeatures = SettlementFeatures;
+type RegionFeatures = SettlementLayout;
 
 export class SettlementSystem {
   private readonly config: WorldConfig;
@@ -16,6 +17,7 @@ export class SettlementSystem {
   private readonly roadGenerator: RoadGenerator;
   private readonly parcelGenerator: ParcelGenerator;
   private readonly houseGenerator: HouseGenerator;
+  private readonly layoutBuilder: SettlementLayoutBuilder;
   private readonly regionCache = new Map<string, RegionFeatures>();
   private readonly maxCachedRegions = 220;
 
@@ -30,6 +32,14 @@ export class SettlementSystem {
     this.roadGenerator = new RoadGenerator(config, terrain, roadSeed);
     this.parcelGenerator = new ParcelGenerator(config, terrain, parcelSeed);
     this.houseGenerator = new HouseGenerator(config, terrain, houseSeed);
+    this.layoutBuilder = new SettlementLayoutBuilder(
+      config,
+      terrain,
+      this.villageGenerator,
+      this.roadGenerator,
+      this.parcelGenerator,
+      this.houseGenerator
+    );
   }
 
   getFeaturesForBounds(minX: number, maxX: number, minY: number, maxY: number): SettlementFeatures {
@@ -98,45 +108,7 @@ export class SettlementSystem {
   }
 
   private generateRegion(regionX: number, regionY: number): RegionFeatures {
-    const regionSize = this.config.roads.regionSize;
-    const coreMinX = regionX * regionSize;
-    const coreMinY = regionY * regionSize;
-    const coreMaxX = coreMinX + regionSize;
-    const coreMaxY = coreMinY + regionSize;
-    const margin = this.config.roads.maxConnectionDistance + this.config.settlement.cellSize;
-
-    const villages = this.villageGenerator.collectVillagesInBounds(
-      coreMinX - margin,
-      coreMaxX + margin,
-      coreMinY - margin,
-      coreMaxY + margin
-    );
-    const regionalRoads = this.roadGenerator.buildRegionalRoadNetwork(villages);
-    const localRoads = this.roadGenerator.buildLocalRoadNetwork(villages, regionalRoads);
-    const roads = [...regionalRoads, ...localRoads];
-    const parcels = this.parcelGenerator.generateParcels(roads, villages);
-    const houses = this.houseGenerator.generateHouses(parcels);
-
-    const regionVillages = villages.filter((village) =>
-      pointInRect(village.x, village.y, coreMinX, coreMaxX, coreMinY, coreMaxY)
-    );
-    const regionRoads = roads.filter((road) => {
-      const mid = roadMidpoint(road);
-      return pointInRect(mid.x, mid.y, coreMinX, coreMaxX, coreMinY, coreMaxY);
-    });
-    const regionParcels = parcels.filter((parcel) =>
-      pointInRect(parcel.x, parcel.y, coreMinX, coreMaxX, coreMinY, coreMaxY)
-    );
-    const regionHouses = houses.filter((house) =>
-      pointInRect(house.x, house.y, coreMinX, coreMaxX, coreMinY, coreMaxY)
-    );
-
-    return {
-      villages: regionVillages,
-      roads: regionRoads,
-      parcels: regionParcels,
-      houses: regionHouses
-    };
+    return this.layoutBuilder.buildRegionLayout(regionX, regionY);
   }
 
   private pruneRegionCache(): void {

@@ -107,7 +107,7 @@ All generation modules should accept config and RNG explicitly (no hidden global
 
 - [x] Seed hashing utilities for per-feature deterministic RNG.
 - [x] Config schema and defaults.
-- [x] Debug overlay toggles (water/moisture/forest/contours/rivers).
+- [x] Minimal runtime telemetry HUD (seed/handshake/chunk/streaming stats).
 
 ### Phase 2: Terrain + Water
 
@@ -154,6 +154,7 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Field visibility pass (opacity, linework, and palette improvements).
 - [x] Tree symbol pass (top-down stylized canopies; no trunk rendering).
 - [x] Dense forest mass rendering (merged canopy polygons with boundary trees).
+- [x] Consistent sun-direction roof shading (light/dark roof faces with directional shadows).
 - [ ] Optional sprite/icon atlas integration for premium tree/building silhouettes.
 
 ### Phase 9: Road/Water Coherence
@@ -171,6 +172,26 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Seam validator default-off to avoid chunk-build stalls in normal play.
 - [ ] Profiling pass for chunk build hotspots (terrain sampling vs settlement synthesis vs overlay draw).
 - [x] Directional chunk prefetch based on movement vector.
+
+### Phase 11: Settlement Layout Graph Refactor
+
+- [x] Introduce deterministic `SettlementLayout` artifact as an intermediate generation output.
+- [x] Add explicit road hierarchy metadata (`arterial`, `collector`, `lane`, `path`) on roads.
+- [x] Refactor local streets to template-driven generation (`lakeside`, `crossroad`, `linear`).
+- [x] Add first-class road graph metadata with bridge-node semantics.
+- [x] Move parcel/house spawn density rules from road style class to road hierarchy class.
+- [x] Switch local street synthesis to trunk-road-first village layouts.
+- [x] Add deterministic branch growth constraints (intersection/overlap suppression and endpoint guards).
+- [x] Apply hierarchy-specific road rendering language to improve arterial/collector/lane/path readability.
+
+### Phase 12: Parallel V2 Sandbox (Stepwise Rebuild)
+
+- [x] Create isolated `v2.html` + `src/v2/*` prototype track.
+- [x] Implement terrain-only stage with elevation metadata (no water).
+- [x] Implement anchor-house + long-trunk-road stage.
+- [x] Implement iterative house growth stage off trunk roads.
+- [x] Implement Y-branch + shortcut stage for organic local variation.
+- [ ] Promote validated V2 systems into main pipeline incrementally.
 
 ## Progress Checklist
 
@@ -191,6 +212,9 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Directional chunk prefetch implemented.
 - [x] Unified water polygon renderer implemented.
 - [ ] Runtime hitching eliminated during chunk travel.
+- [x] Settlement layout artifact + road hierarchy graph metadata implemented.
+- [x] Trunk-road-first and constrained branch-growth local road generation implemented.
+- [x] Parallel V2 staged-prototype sandbox implemented.
 
 ## Open Design Decisions
 

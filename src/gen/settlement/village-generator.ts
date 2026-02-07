@@ -13,6 +13,7 @@ type VillageCandidate = {
   y: number;
   score: number;
   tieBreaker: number;
+  coastDistance: number;
 };
 
 export class VillageGenerator {
@@ -90,6 +91,7 @@ export class VillageGenerator {
 
     const sizeNoise = hashToUnit(hashCoords(this.villageSeed, cellX, cellY, 223));
     const radius = lerp(44, 92, clamp(candidate.score * 0.65 + sizeNoise * 0.35, 0, 1));
+    const template = this.selectVillageTemplate(candidate.score, candidate.coastDistance, cellX, cellY);
 
     return {
       id: candidate.id,
@@ -98,7 +100,8 @@ export class VillageGenerator {
       score: candidate.score,
       radius,
       cellX,
-      cellY
+      cellY,
+      template
     };
   }
 
@@ -117,10 +120,10 @@ export class VillageGenerator {
     const y = (cellY + jitterY) * cellSize;
     const probe = this.terrain.probe(x, y);
     const tieBreaker = hashToUnit(mixUint32(seed ^ 0xa1d8723f));
+    const coastDistance = this.estimateCoastDistance(x, y);
 
     let score = 0;
     if (probe.waterDepth <= 0.003) {
-      const coastDistance = this.estimateCoastDistance(x, y);
       const slopeFactor = 1 - smoothstep(0.08, 0.62, probe.slope);
       const moistureDelta = Math.abs(probe.moisture - this.config.settlement.targetMoisture);
       const moistureFactor = 1 - clamp(moistureDelta / 0.46, 0, 1);
@@ -142,7 +145,8 @@ export class VillageGenerator {
       x,
       y,
       score,
-      tieBreaker
+      tieBreaker,
+      coastDistance
     };
 
     this.candidateCache.set(key, candidate);
@@ -162,6 +166,19 @@ export class VillageGenerator {
       return 1;
     }
     return clamp(1 - (distance - preferredMax) / Math.max(1, searchMax - preferredMax), 0, 1);
+  }
+
+  private selectVillageTemplate(score: number, coastDistance: number, cellX: number, cellY: number): "lakeside" | "crossroad" | "linear" {
+    const nearCoastThreshold = this.config.settlement.preferredCoastMin * 1.2;
+    if (coastDistance <= nearCoastThreshold) {
+      return "lakeside";
+    }
+
+    const roll = hashToUnit(hashCoords(this.villageSeed, cellX, cellY, 947));
+    if (score > this.config.settlement.suitabilityThreshold + 0.16 || roll < 0.34) {
+      return "crossroad";
+    }
+    return "linear";
   }
 
   private estimateCoastDistance(x: number, y: number): number {

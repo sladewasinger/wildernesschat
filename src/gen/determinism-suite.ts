@@ -78,13 +78,15 @@ const settlementsDigest = (config: WorldConfig): { coreHash: string; idHash: str
   const parcels = features.parcels.slice().sort((a, b) => a.id.localeCompare(b.id));
   const houses = features.houses.slice().sort((a, b) => a.id.localeCompare(b.id));
 
-  const villageData = villages.map((v) => `${v.id}:${q(v.x, 2)},${q(v.y, 2)},${q(v.score, 4)},${q(v.radius, 2)}`);
+  const villageData = villages.map((v) => `${v.id}:${v.template}:${q(v.x, 2)},${q(v.y, 2)},${q(v.score, 4)},${q(v.radius, 2)}`);
   const roadData = roads.map((r) => {
     const start = r.points[0];
     const end = r.points[r.points.length - 1];
-    return `${r.id}:${r.type}:${q(r.width, 2)}:${q(start?.x ?? 0, 2)},${q(start?.y ?? 0, 2)}>${q(end?.x ?? 0, 2)},${q(end?.y ?? 0, 2)}`;
+    return `${r.id}:${r.type}:${r.hierarchy}:${q(r.width, 2)}:${q(start?.x ?? 0, 2)},${q(start?.y ?? 0, 2)}>${q(end?.x ?? 0, 2)},${q(end?.y ?? 0, 2)}`;
   });
-  const parcelData = parcels.map((p) => `${p.id}:${p.roadId}:${q(p.x, 2)},${q(p.y, 2)},${q(p.width, 2)},${q(p.depth, 2)},${q(p.angle, 4)}`);
+  const parcelData = parcels.map(
+    (p) => `${p.id}:${p.roadId}:${p.roadHierarchy}:${q(p.x, 2)},${q(p.y, 2)},${q(p.width, 2)},${q(p.depth, 2)},${q(p.angle, 4)}`
+  );
   const houseData = houses.map((h) => `${h.id}:${q(h.x, 2)},${q(h.y, 2)},${q(h.width, 2)},${q(h.depth, 2)},${q(h.angle, 4)},${h.roofStyle}`);
 
   const coreHash = toHash([...villageData, ...roadData, ...parcelData, ...houseData].join(";"));

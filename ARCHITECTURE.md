@@ -6,6 +6,9 @@ This project uses deterministic procedural generation with clear module boundari
 
 - `src/main.ts`
   - Parses URL config overrides and boots the app.
+- `v2.html` + `src/v2/main.ts`
+  - Parallel sandbox entrypoint for staged village-generation prototyping.
+  - Isolated from the main world pipeline to allow fast visual iteration.
 - `src/game.ts`
   - Camera/input loop and HUD.
 - `src/world/world.ts`
@@ -29,11 +32,17 @@ This project uses deterministic procedural generation with clear module boundari
 - `src/world/render/feature-overlay-renderer.ts`
   - Rivers, forests, fields, roads, villages, parcels, and houses overlays.
   - Applies outline-first cartographic styling, bridge rendering at river crossings, and river-mouth blending.
+  - Uses hierarchy-specific road stroke/fill language for arterial/collector/lane/path readability.
   - Renders dense canopy masses for forests with individual edge trees.
 - `src/world/render/superchunk-feature-cache.ts`
   - Superchunk-scoped settlement feature cache with eviction.
 - `src/world/render/chunk-seam-validator.ts`
   - Optional seam checks between generated neighbor chunk edges.
+
+## Style Modules
+
+- `src/world/style/cartographic-style.ts`
+  - Central art-direction constants (sun direction, shadow offsets, roof palette families).
 
 ## Generation Modules
 
@@ -44,28 +53,33 @@ This project uses deterministic procedural generation with clear module boundari
   - Enforces water-connected river termination and anti-loop safeguards.
 - `src/gen/settlement/system.ts`
   - Settlement aggregate pipeline and region cache.
-  - Composition root for settlement submodules.
+  - Composes generators through `SettlementLayoutBuilder`, then exposes render-facing `SettlementFeatures`.
+- `src/gen/layout/settlement-layout-builder.ts`
+  - Builds deterministic per-region `SettlementLayout` artifacts.
+  - Produces first-class road graph metadata (`roadNodes`/`roadEdges`) with bridge-node semantics.
 - `src/gen/determinism-suite.ts`
   - Determinism report and repeat-run consistency checks.
 
 ## Settlement Submodules
 
 - `src/gen/settlement/village-generator.ts`
-  - Village siting (suitability + spacing).
+  - Village siting (suitability + spacing) and deterministic village template selection.
 - `src/gen/settlement/road-generator.ts`
-  - Regional + local roads.
-  - Local streets are village-axis-aligned bands with controlled connectors to nearby regional roads.
+  - Regional + local roads with explicit hierarchy metadata (`arterial`, `collector`, `lane`, `path`).
+  - Local streets are template-driven (`lakeside`, `crossroad`, `linear`) with trunk-road-first layout.
+  - Deterministic branch growth runs off trunk corridors with intersection/overlap guards.
+  - Controlled regional connectors attach villages to nearby regional roads through trunk anchors.
   - Regional routing reserves bridgeable water spans for downstream bridge rendering.
 - `src/gen/settlement/parcel-generator.ts`
-  - Lot/parcel generation along roads.
+  - Lot/parcel generation along roads with hierarchy-aware frontage density rules.
 - `src/gen/settlement/house-generator.ts`
-  - House placement from parcels.
+  - House placement from parcels with hierarchy-aware occupancy.
 - `src/gen/settlement/types.ts`
-  - Shared settlement domain types.
+  - Shared settlement domain types, including `SettlementLayout` and road graph primitives.
 - `src/gen/settlement/geometry.ts`
   - Shared geometry helpers.
 - `src/gen/settlement/stable-ids.ts`
-  - Canonical deterministic IDs for villages/roads/parcels/houses.
+  - Canonical deterministic IDs for villages/roads/parcels/houses and road graph nodes/edges.
 
 ## Multiplayer Readiness
 
@@ -83,6 +97,19 @@ This project uses deterministic procedural generation with clear module boundari
 - Readable over clever:
   - Narrow, single-purpose modules instead of one monolithic generator file.
 
+## Experimental Sandbox
+
+- `src/v2/terrain.ts`
+  - Terrain-only elevation/slope prototype sampler (no water dependency).
+- `src/v2/generator.ts`
+  - Stepwise settlement prototype generator:
+  - Stage 0 terrain-only
+  - Stage 1 anchor house + trunk road
+  - Stage 2 iterative house growth from trunk
+  - Stage 3 Y-branches + shortcuts
+- `src/v2/app.ts`
+  - Rendering and stage controls (`1-4` or `[ ]`) for visual verification.
+
 ## Legacy
 
-- `src/wfc/*` remains for historical reference only and is not used by the active runtime.
+- Legacy WFC modules have been removed from the active codebase.

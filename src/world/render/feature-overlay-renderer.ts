@@ -4,6 +4,7 @@ import { RiverPath } from "../../gen/rivers";
 import { House, Parcel, Road, SettlementFeatures, SettlementSystem, Village } from "../../gen/settlements";
 import { TerrainSampler } from "../../gen/terrain";
 import { clamp, floorDiv, lerp } from "../../util/math";
+import { CARTOGRAPHIC_STYLE } from "../style/cartographic-style";
 import { LandUseBlender } from "./land-use-blender";
 import { SuperchunkFeatureCache } from "./superchunk-feature-cache";
 
@@ -573,17 +574,29 @@ export class FeatureOverlayRenderer {
   }
 
   private strokeRoadPath(ctx: CanvasRenderingContext2D, road: Road): void {
+    const outerPad =
+      road.hierarchy === "arterial"
+        ? 3.2
+        : road.hierarchy === "collector"
+          ? 2.7
+          : road.hierarchy === "lane"
+            ? 2.15
+            : 1.75;
+    const fillStyle =
+      road.hierarchy === "arterial"
+        ? "rgba(226, 212, 171, 0.985)"
+        : road.hierarchy === "collector"
+          ? "rgba(213, 201, 164, 0.97)"
+          : road.hierarchy === "lane"
+            ? "rgba(204, 196, 167, 0.95)"
+            : "rgba(188, 182, 158, 0.94)";
+
     ctx.strokeStyle = "rgba(8, 10, 11, 0.88)";
-    ctx.lineWidth = road.width + (road.type === "local" ? 2.2 : 2.9);
+    ctx.lineWidth = road.width + outerPad;
     ctx.stroke();
 
-    ctx.strokeStyle =
-      road.type === "major"
-        ? "rgba(223, 211, 169, 0.98)"
-        : road.type === "minor"
-          ? "rgba(210, 201, 163, 0.96)"
-          : "rgba(205, 198, 170, 0.94)";
-    ctx.lineWidth = road.width;
+    ctx.strokeStyle = fillStyle;
+    ctx.lineWidth = road.hierarchy === "path" ? road.width * 0.94 : road.width;
     ctx.stroke();
   }
 
@@ -871,20 +884,19 @@ export class FeatureOverlayRenderer {
   private drawHouse(ctx: CanvasRenderingContext2D, startX: number, startY: number, house: House): void {
     const x = house.x - startX;
     const y = house.y - startY;
-    const roofPalette = [
-      { roof: "#907367", wall: "#c3b59d" },
-      { roof: "#6f7680", wall: "#b7b8b0" },
-      { roof: "#8f6654", wall: "#c2b19e" },
-      { roof: "#7d6f5f", wall: "#bbb09f" }
-    ];
-    const palette = roofPalette[house.roofStyle % roofPalette.length];
+    const palette = CARTOGRAPHIC_STYLE.roofPalettes[house.roofStyle % CARTOGRAPHIC_STYLE.roofPalettes.length];
 
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(house.angle);
 
     ctx.fillStyle = "rgba(25, 33, 38, 0.2)";
-    ctx.fillRect(-house.width * 0.55 + 1.5, -house.depth * 0.5 + 2.5, house.width, house.depth);
+    ctx.fillRect(
+      -house.width * 0.55 + CARTOGRAPHIC_STYLE.shadowOffset.x,
+      -house.depth * 0.5 + CARTOGRAPHIC_STYLE.shadowOffset.y,
+      house.width,
+      house.depth
+    );
 
     ctx.fillStyle = palette.wall;
     ctx.strokeStyle = "rgba(8, 10, 10, 0.9)";
@@ -892,14 +904,30 @@ export class FeatureOverlayRenderer {
     ctx.fillRect(-house.width * 0.5, -house.depth * 0.5, house.width, house.depth);
     ctx.strokeRect(-house.width * 0.5, -house.depth * 0.5, house.width, house.depth);
 
-    ctx.fillStyle = palette.roof;
-    ctx.fillRect(-house.width * 0.6, -house.depth * 0.52, house.width * 1.2, house.depth * 0.58);
-    ctx.strokeRect(-house.width * 0.6, -house.depth * 0.52, house.width * 1.2, house.depth * 0.58);
+    const roofX = -house.width * 0.6;
+    const roofY = -house.depth * 0.52;
+    const roofW = house.width * 1.2;
+    const roofH = house.depth * 0.58;
+    const ridgeY = roofY + roofH * 0.52;
 
-    ctx.strokeStyle = "rgba(14, 11, 9, 0.64)";
+    const cos = Math.cos(house.angle);
+    const sin = Math.sin(house.angle);
+    const localSunY = -CARTOGRAPHIC_STYLE.sunDirection.x * sin + CARTOGRAPHIC_STYLE.sunDirection.y * cos;
+    const topLight = localSunY < 0;
+
+    ctx.fillStyle = topLight ? palette.roofLight : palette.roofDark;
+    ctx.fillRect(roofX, roofY, roofW, ridgeY - roofY);
+
+    ctx.fillStyle = topLight ? palette.roofDark : palette.roofLight;
+    ctx.fillRect(roofX, ridgeY, roofW, roofY + roofH - ridgeY);
+
+    ctx.strokeStyle = "rgba(8, 10, 10, 0.9)";
+    ctx.strokeRect(roofX, roofY, roofW, roofH);
+
+    ctx.strokeStyle = "rgba(12, 10, 9, 0.66)";
     ctx.beginPath();
-    ctx.moveTo(-house.width * 0.55, -house.depth * 0.4);
-    ctx.lineTo(house.width * 0.55, -house.depth * 0.4);
+    ctx.moveTo(roofX + 1.4, ridgeY);
+    ctx.lineTo(roofX + roofW - 1.4, ridgeY);
     ctx.stroke();
 
     ctx.restore();

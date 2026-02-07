@@ -1,0 +1,47 @@
+import { clamp } from "../util/math";
+import { hashString } from "../gen/hash";
+import { fbm2D } from "../gen/noise";
+
+const ELEVATION_OPTIONS = {
+  octaves: 5,
+  persistence: 0.52,
+  lacunarity: 2.05
+} as const;
+
+const MACRO_OPTIONS = {
+  octaves: 4,
+  persistence: 0.56,
+  lacunarity: 2.1
+} as const;
+
+export class V2TerrainSampler {
+  private readonly warpSeed: number;
+  private readonly macroSeed: number;
+  private readonly localSeed: number;
+
+  constructor(seed: string) {
+    this.warpSeed = hashString(`${seed}:v2:warp`);
+    this.macroSeed = hashString(`${seed}:v2:macro`);
+    this.localSeed = hashString(`${seed}:v2:local`);
+  }
+
+  elevationAt(x: number, y: number): number {
+    const warpX = (fbm2D(this.warpSeed, x * 0.0011, y * 0.0011, ELEVATION_OPTIONS) - 0.5) * 170;
+    const warpY = (fbm2D(this.warpSeed ^ 0x7f4a7c15, x * 0.0011, y * 0.0011, ELEVATION_OPTIONS) - 0.5) * 170;
+    const wx = x + warpX;
+    const wy = y + warpY;
+
+    const macro = fbm2D(this.macroSeed, wx * 0.00027, wy * 0.00027, MACRO_OPTIONS);
+    const local = fbm2D(this.localSeed, wx * 0.0018, wy * 0.0018, ELEVATION_OPTIONS);
+    return clamp(macro * 0.6 + local * 0.4, 0, 1);
+  }
+
+  slopeAt(x: number, y: number): number {
+    const step = 9;
+    const l = this.elevationAt(x - step, y);
+    const r = this.elevationAt(x + step, y);
+    const d = this.elevationAt(x, y - step);
+    const u = this.elevationAt(x, y + step);
+    return Math.hypot(r - l, u - d);
+  }
+}

@@ -2,8 +2,6 @@
 
 This repo is now running an organic terrain/water/settlement generator with phase 5-7 systems in place (land-use blending, streaming/perf controls, determinism tooling) toward a Watabou-style village/countryside map.
 
-The old image-trained WFC modules are still in `src/wfc/*` as legacy reference, but they are no longer used by runtime.
-
 ## Current Run Command
 
 ```bash
@@ -12,6 +10,11 @@ npm run dev
 ```
 
 Open `http://localhost:5173`.
+
+Parallel sandbox prototype:
+
+- `http://localhost:5173/v2.html`
+- Optional params: `seed`, `stage` (`0..3`)
 
 ## Query Params
 
@@ -35,16 +38,6 @@ Example:
 ## Runtime Controls
 
 - Move: `WASD` / Arrow Keys
-- Debug overlays:
-- `1` water mask
-- `2` moisture
-- `3` forest mask
-- `4` contours
-- `5` rivers
-- `6` roads
-- `7` village markers
-- `8` houses
-- `9` parcels
 
 ## Current Generator Layers
 
@@ -52,7 +45,7 @@ Example:
 - Water: unified raster layer from sea-level mask + river channels
 - Settlements: deterministic suitability scoring + spacing
 - Roads: regional graph (MST + loop edges) with curved routing
-- Local streets: village-axis-guided lanes and cross streets with reduced overlap
+- Local streets: trunk-road-first synthesis with deterministic branch constraints
 - Parcels: roadside lot generation for village blocks/frontage
 - Houses: parcel-based placement aligned to road-facing lots
 - Fields: deterministic village-outskirt agricultural patches (first pass)
@@ -64,14 +57,14 @@ Example:
 
 Notes:
 
-- Contours are optional styling; toggle with `4`.
 - Moisture is an ecological scalar used by forests/settlements, not a direct water depth indicator.
-- When any mask view is active (`1`/`2`/`3`), decorative layers (roads/parcels/houses/trees) are hidden so the mask reads clearly.
 - Determinism suite can be run via URL (`?determinism=1`) and compared across machines using reported hashes.
 
 ## Structure
 
 See `ARCHITECTURE.md` for module boundaries and generation pipeline organization.
+
+The sandbox rebuild track lives under `src/v2/*` and is intentionally isolated from the main world pipeline.
 
 ## Pivot Plan
 

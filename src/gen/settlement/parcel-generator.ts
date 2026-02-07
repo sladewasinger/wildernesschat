@@ -3,7 +3,7 @@ import { WorldConfig } from "../config";
 import { hashCoords, hashString, hashToUnit } from "../hash";
 import { TerrainSampler } from "../terrain";
 import { parcelIdForRoadPosition } from "./stable-ids";
-import { Parcel, Road, Village } from "./types";
+import { Parcel, Road, RoadHierarchy, Village } from "./types";
 
 export class ParcelGenerator {
   private readonly config: WorldConfig;
@@ -28,7 +28,7 @@ export class ParcelGenerator {
     }
 
     for (const road of roads) {
-      const spacingMultiplier = road.type === "major" ? 1.6 : road.type === "minor" ? 1.25 : 1;
+      const spacingMultiplier = this.parcelSpacingMultiplier(road.hierarchy);
       const spacing = this.config.houses.spacing * spacingMultiplier;
 
       for (let i = 1; i < road.points.length; i += 1) {
@@ -62,7 +62,7 @@ export class ParcelGenerator {
 
           for (const side of [-1, 1] as const) {
             const localHash = hashString(`${road.id}:${i}:${step}:${side}`);
-            if (!this.shouldSpawnParcel(localHash, road.type)) {
+            if (!this.shouldSpawnParcel(localHash, road.hierarchy)) {
               continue;
             }
 
@@ -98,6 +98,7 @@ export class ParcelGenerator {
               villageId: village.id,
               roadId: road.id,
               roadType: road.type,
+              roadHierarchy: road.hierarchy,
               x,
               y,
               width,
@@ -114,23 +115,38 @@ export class ParcelGenerator {
     return parcels;
   }
 
-  private shouldSpawnParcel(localHash: number, roadType: Road["type"]): boolean {
+  private parcelSpacingMultiplier(roadHierarchy: RoadHierarchy): number {
+    if (roadHierarchy === "arterial") {
+      return 1.85;
+    }
+    if (roadHierarchy === "collector") {
+      return 1.35;
+    }
+    if (roadHierarchy === "lane") {
+      return 1;
+    }
+    return 0.9;
+  }
+
+  private shouldSpawnParcel(localHash: number, roadHierarchy: RoadHierarchy): boolean {
     const roll = hashToUnit(hashCoords(this.parcelSeed ^ localHash, 3, 7, 61));
     const chance =
-      roadType === "major"
-        ? this.config.houses.sideChance * 0.25
-        : roadType === "minor"
-          ? this.config.houses.sideChance * 0.58
-          : this.config.houses.sideChance * 0.95;
+      roadHierarchy === "arterial"
+        ? this.config.houses.sideChance * 0.16
+        : roadHierarchy === "collector"
+          ? this.config.houses.sideChance * 0.52
+          : roadHierarchy === "lane"
+            ? this.config.houses.sideChance * 0.95
+            : this.config.houses.sideChance * 0.66;
     return roll <= chance;
   }
 
   private shouldKeepForVillageDensity(road: Road, x: number, y: number, village: Village): boolean {
-    if (road.type === "local") {
+    if (road.hierarchy === "lane" || road.hierarchy === "path") {
       return true;
     }
     const distance = Math.hypot(x - village.x, y - village.y);
-    const range = road.type === "minor" ? village.radius * 2.8 : village.radius * 2.1;
+    const range = road.hierarchy === "collector" ? village.radius * 2.8 : village.radius * 2.1;
     return distance <= range;
   }
 

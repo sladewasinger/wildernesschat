@@ -1,4 +1,4 @@
-import { DebugLayerConfig, WorldConfig } from "../gen/config";
+import { WorldConfig } from "../gen/config";
 import { hashString } from "../gen/hash";
 import { RiverSystem } from "../gen/rivers";
 import { SettlementSystem } from "../gen/settlements";
@@ -27,19 +27,17 @@ export class World {
   private readonly chunkCache = new Map<string, Chunk>();
   private readonly pendingQueue: string[] = [];
   private readonly pendingSet = new Set<string>();
-  private readonly debug: DebugLayerConfig;
 
   constructor(config: WorldConfig) {
     this.config = config;
     this.terrain = createTerrainSampler(config);
     const rivers = new RiverSystem(config, this.terrain);
     const settlements = new SettlementSystem(config, this.terrain);
-    this.debug = { ...config.debug };
 
     const seedHash = hashString(`${config.seed}:surface`);
     const treeSeed = hashString(`${config.seed}:trees`);
     const fieldSeed = hashString(`${config.seed}:fields`);
-    this.chunkRenderer = new ChunkRenderer(config, this.terrain, rivers, settlements, this.debug, seedHash, treeSeed, fieldSeed);
+    this.chunkRenderer = new ChunkRenderer(config, this.terrain, rivers, settlements, config.debug, seedHash, treeSeed, fieldSeed);
     this.seamValidator = new ChunkSeamValidator(config);
     this.placeholderCanvas = this.createPlaceholderChunkCanvas(config.chunk.pixelSize);
   }
@@ -50,17 +48,6 @@ export class World {
 
   getChunkSize(): number {
     return this.config.chunk.pixelSize;
-  }
-
-  getDebugLayers(): DebugLayerConfig {
-    return { ...this.debug };
-  }
-
-  toggleDebugLayer(layer: keyof DebugLayerConfig): void {
-    this.debug[layer] = !this.debug[layer];
-    this.chunkCache.clear();
-    this.pendingSet.clear();
-    this.pendingQueue.length = 0;
   }
 
   sampleAt(worldX: number, worldY: number): TerrainProbe {

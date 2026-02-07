@@ -57,11 +57,13 @@ export class HouseGenerator {
   private shouldPlaceHouse(parcel: Parcel, localSeed: number): boolean {
     const roll = hashToUnit(hashCoords(localSeed, 1, 1, 67));
     const chance =
-      parcel.roadType === "major"
-        ? 0.46
-        : parcel.roadType === "minor"
-          ? 0.72
-          : 0.88;
+      parcel.roadHierarchy === "arterial"
+        ? 0.38
+        : parcel.roadHierarchy === "collector"
+          ? 0.68
+          : parcel.roadHierarchy === "lane"
+            ? 0.9
+            : 0.72;
     return roll <= chance;
   }
 }

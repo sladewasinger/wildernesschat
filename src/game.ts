@@ -45,9 +45,6 @@ export class Game {
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (this.toggleDebugLayer(event)) {
-      return;
-    }
     if (event.key === "w" || event.key === "ArrowUp") this.input.up = true;
     if (event.key === "s" || event.key === "ArrowDown") this.input.down = true;
     if (event.key === "a" || event.key === "ArrowLeft") this.input.left = true;
@@ -113,7 +110,6 @@ export class Game {
     }
 
     const sample = this.world.sampleAt(this.playerX, this.playerY);
-    const debug = this.world.getDebugLayers();
     const generation = this.world.getGenerationStats();
     const handshake = this.world.getWorldHandshake();
 
@@ -125,64 +121,20 @@ export class Game {
     ctx.lineWidth = 2;
     ctx.stroke();
 
+    const speedX = (this.input.right ? 1 : 0) - (this.input.left ? 1 : 0);
+    const speedY = (this.input.down ? 1 : 0) - (this.input.up ? 1 : 0);
+    const moveMag = Math.hypot(speedX, speedY) > 0 ? 1 : 0;
+
     this.hud.textContent = [
-      "Organic village generator (phase 0-7 systems implemented)",
+      "Village Generator",
       "Move: WASD / Arrows",
-      "Debug: 1 water 2 moisture 3 forest 4 contours 5 rivers 6 roads 7 villages 8 houses 9 parcels",
-      "Mask modes (1/2/3) hide roads/parcels/houses/trees for readability",
       `Seed: ${this.world.getSeed()}`,
       `Handshake: v${handshake.protocolVersion} hash=${handshake.configHash}`,
       `Player px: ${this.playerX.toFixed(1)}, ${this.playerY.toFixed(1)}`,
+      `Movement: ${moveMag ? "moving" : "idle"}`,
       `Chunk: ${floorDiv(this.playerX, chunkSize)}, ${floorDiv(this.playerY, chunkSize)}`,
-      `Elev: ${sample.elevation.toFixed(3)} Moisture: ${sample.moisture.toFixed(3)}`,
-      `Slope: ${sample.slope.toFixed(3)} Forest: ${sample.forestDensity.toFixed(3)}`,
-      `Water depth: ${sample.waterDepth.toFixed(3)}`,
-      `Streaming: pendingChunks=${generation.pendingChunks} seamWarnings=${generation.seamWarnings}`,
-      `Layers: water=${debug.showWaterMask ? "on" : "off"} moisture=${debug.showMoisture ? "on" : "off"} forest=${debug.showForestMask ? "on" : "off"} contours=${debug.showContours ? "on" : "off"} rivers=${debug.showRivers ? "on" : "off"} roads=${debug.showRoads ? "on" : "off"} villages=${debug.showVillages ? "on" : "off"} parcels=${debug.showParcels ? "on" : "off"} houses=${debug.showHouses ? "on" : "off"}`
+      `Terrain: elev=${sample.elevation.toFixed(3)} moist=${sample.moisture.toFixed(3)} slope=${sample.slope.toFixed(3)} water=${sample.waterDepth.toFixed(3)}`,
+      `Streaming: pending=${generation.pendingChunks} seamWarnings=${generation.seamWarnings}`
     ].join("\n");
-  }
-
-  private toggleDebugLayer(event: KeyboardEvent): boolean {
-    if (event.repeat) {
-      return true;
-    }
-
-    if (event.key === "1") {
-      this.world.toggleDebugLayer("showWaterMask");
-      return true;
-    }
-    if (event.key === "2") {
-      this.world.toggleDebugLayer("showMoisture");
-      return true;
-    }
-    if (event.key === "3") {
-      this.world.toggleDebugLayer("showForestMask");
-      return true;
-    }
-    if (event.key === "4") {
-      this.world.toggleDebugLayer("showContours");
-      return true;
-    }
-    if (event.key === "5") {
-      this.world.toggleDebugLayer("showRivers");
-      return true;
-    }
-    if (event.key === "6") {
-      this.world.toggleDebugLayer("showRoads");
-      return true;
-    }
-    if (event.key === "7") {
-      this.world.toggleDebugLayer("showVillages");
-      return true;
-    }
-    if (event.key === "8") {
-      this.world.toggleDebugLayer("showHouses");
-      return true;
-    }
-    if (event.key === "9") {
-      this.world.toggleDebugLayer("showParcels");
-      return true;
-    }
-    return false;
   }
 }
