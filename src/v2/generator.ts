@@ -2,10 +2,16 @@ import { clamp } from "../util/math";
 import { hashString } from "../gen/hash";
 import { V2_SETTLEMENT_CONFIG, V2_STAGE_MAX, V2_STAGE_MIN } from "./config";
 import { V2TerrainSampler } from "./terrain";
-import { VillagePlan, VillageSite } from "./types";
+import { RoadSegment, VillagePlan, VillageSite } from "./types";
 import { addBranches } from "./generator/branching";
 import { buildAnchorPlacement, growHousesAlongRoad } from "./generator/housing";
-import { addInterVillageConnectors } from "./generator/inter-village";
+import {
+  addInterVillageConnectors,
+  collectContinuityRoadsInBounds,
+  collectContinuityRoadsNearSite,
+  createStage4ContinuityContext,
+  Stage4ContinuityContext
+} from "./generator/inter-village";
 import { collectSitesInBounds, SiteSelectionContext } from "./generator/site-selection";
 import { addShortcuts } from "./generator/shortcuts";
 import { pickStage3GrowthProfile } from "./generator/stage3-profile";
@@ -18,6 +24,7 @@ export class V2SettlementGenerator {
   private readonly siteCache = new Map<string, VillageSite | null>();
   private readonly planCache = new Map<string, VillagePlan>();
   private readonly siteSelectionContext: SiteSelectionContext;
+  private readonly stage4ContinuityContext: Stage4ContinuityContext;
 
   constructor(seed: string, terrain: V2TerrainSampler) {
     this.siteSeed = hashString(`${seed}:v2:sites`);
@@ -30,10 +37,23 @@ export class V2SettlementGenerator {
       minSiteScore: V2_SETTLEMENT_CONFIG.siting.minSiteScore,
       siteCache: this.siteCache
     };
+    this.stage4ContinuityContext = createStage4ContinuityContext(this.planSeed, this.terrain);
   }
 
   collectSitesInBounds(minX: number, maxX: number, minY: number, maxY: number): VillageSite[] {
     return collectSitesInBounds(this.siteSelectionContext, minX, maxX, minY, maxY);
+  }
+
+  collectStage4ContinuityRoadsInBounds(minX: number, maxX: number, minY: number, maxY: number): RoadSegment[] {
+    return collectContinuityRoadsInBounds(
+      this.stage4ContinuityContext,
+      this.siteSelectionContext,
+      this.planSeed,
+      minX,
+      maxX,
+      minY,
+      maxY
+    );
   }
 
   buildVillagePlan(site: VillageSite, stage: number): VillagePlan {
@@ -96,6 +116,13 @@ export class V2SettlementGenerator {
     }
 
     if (stageValue >= 4) {
+      const continuityRoads = collectContinuityRoadsNearSite(
+        this.stage4ContinuityContext,
+        this.siteSelectionContext,
+        this.planSeed,
+        site,
+        V2_SETTLEMENT_CONFIG.stage4.attachments.searchRadius
+      );
       metrics.connectorCount = addInterVillageConnectors({
         site,
         trunk,
@@ -103,7 +130,7 @@ export class V2SettlementGenerator {
         houses,
         planSeed: this.planSeed,
         terrain: this.terrain,
-        siteContext: this.siteSelectionContext
+        continuityRoads
       });
     }
 

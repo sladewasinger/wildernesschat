@@ -16,7 +16,7 @@ const STAGE_LABELS = [
   "1 Anchor House + Trunk",
   "2 Iterative House Growth",
   "3 Y-Branches + Shortcuts",
-  "4 Inter-Village Connectors"
+  "4 Road-First Continuity"
 ];
 
 export class V2App {
@@ -149,6 +149,10 @@ export class V2App {
     const minY = this.playerY - viewHeight * 0.5 - margin;
     const maxY = this.playerY + viewHeight * 0.5 + margin;
     const sites = this.generator.collectSitesInBounds(minX, maxX, minY, maxY);
+    if (this.stage >= 4) {
+      const continuityRoads = this.generator.collectStage4ContinuityRoadsInBounds(minX, maxX, minY, maxY);
+      this.drawRoads(continuityRoads, viewMinX, viewMinY);
+    }
     const planBySiteId = new Map<string, ReturnType<V2SettlementGenerator["buildVillagePlan"]>>();
 
     for (const site of sites) {

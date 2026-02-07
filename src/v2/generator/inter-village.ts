@@ -1,12 +1,19 @@
-import { lerp } from "../../util/math";
+import { clamp, lerp } from "../../util/math";
 import { hashCoords, hashString, hashToUnit } from "../../gen/hash";
+import { fbm2D } from "../../gen/noise";
 import { V2_SETTLEMENT_CONFIG } from "../config";
 import { V2TerrainSampler } from "../terrain";
-import { House, RoadSegment, VillageSite } from "../types";
-import { closestPointOnRoad, hasParallelRoadConflict, isRoadUsable, sampleRoad } from "./geometry";
-import { growHousesAlongRoad, isRoadNearHouses } from "./housing";
-import { collectNearbySites, SiteSelectionContext } from "./site-selection";
-import { buildTrunkRoad, createDirectionalRoad } from "./trunk";
+import { House, Point, RoadSegment, VillageSite } from "../types";
+import { polylineLength, sampleRoad } from "./geometry";
+import { SiteSelectionContext, collectSitesInBounds } from "./site-selection";
+import { buildTrunkRoad } from "./trunk";
+
+export type Stage4ContinuityContext = {
+  continuitySeed: number;
+  fieldSeed: number;
+  terrain: V2TerrainSampler;
+  roadCache: Map<string, RoadSegment[]>;
+};
 
 type AddInterVillageConnectorsParams = {
   site: VillageSite;
@@ -15,314 +22,336 @@ type AddInterVillageConnectorsParams = {
   houses: House[];
   planSeed: number;
   terrain: V2TerrainSampler;
-  siteContext: SiteSelectionContext;
+  continuityRoads: RoadSegment[];
 };
 
-type PairBuild = {
-  pairKey: string;
-  pairHash: number;
-  span: number;
-  localAnchor: { x: number; y: number };
-  remoteAnchor: { x: number; y: number };
+type StepCandidate = {
+  point: Point;
+  dirX: number;
+  dirY: number;
 };
 
-export const addInterVillageConnectors = ({
-  site,
-  trunk,
-  roads,
-  houses,
-  planSeed,
+export const createStage4ContinuityContext = (planSeed: number, terrain: V2TerrainSampler): Stage4ContinuityContext => ({
+  continuitySeed: hashString(`${planSeed}:v2:stage4:continuity`),
+  fieldSeed: hashString(`${planSeed}:v2:stage4:continuity-field`),
   terrain,
-  siteContext
-}: AddInterVillageConnectorsParams): number => {
-  const stage4 = V2_SETTLEMENT_CONFIG.stage4;
-  const interVillage = stage4.interVillage;
-  const extensions = stage4.extensions;
-  const outbound = stage4.outbound;
-  const allNeighbors = collectNearbySites(siteContext, site, interVillage.maxDistance);
-  const eligibleNeighbors = allNeighbors.filter((neighbor) => {
-    const dist = Math.hypot(neighbor.x - site.x, neighbor.y - site.y);
-    return dist >= interVillage.minDistance && dist <= interVillage.maxDistance;
-  });
+  roadCache: new Map<string, RoadSegment[]>()
+});
 
-  const connectorTarget = resolveConnectorTargetCount(site, planSeed);
-  if (connectorTarget <= 0) {
-    return 0;
-  }
+export const collectContinuityRoadsNearSite = (
+  context: Stage4ContinuityContext,
+  siteContext: SiteSelectionContext,
+  planSeed: number,
+  site: VillageSite,
+  radius: number
+): RoadSegment[] => collectContinuityRoadsInBounds(context, siteContext, planSeed, site.x - radius, site.x + radius, site.y - radius, site.y + radius);
 
-  let connectorAdded = 0;
-  let extensionAdded = 0;
-  let outboundAdded = 0;
-  const connectedPairs = new Set<string>();
+export const collectContinuityRoadsInBounds = (
+  context: Stage4ContinuityContext,
+  siteContext: SiteSelectionContext,
+  planSeed: number,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number
+): RoadSegment[] => {
+  const continuity = V2_SETTLEMENT_CONFIG.stage4.continuity;
+  const sourcePadding = continuity.sourceSitePadding;
+  const drawPadding = continuity.boundsPadding;
 
-  for (const neighbor of eligibleNeighbors) {
-    if (connectorAdded >= connectorTarget) {
-      break;
-    }
+  const sourceSites = collectSitesInBounds(
+    siteContext,
+    minX - sourcePadding,
+    maxX + sourcePadding,
+    minY - sourcePadding,
+    maxY + sourcePadding
+  );
 
-    const pair = buildPair(site, trunk, neighbor, planSeed, interVillage.minDistance);
-    if (!pair || connectedPairs.has(pair.pairKey)) {
-      continue;
-    }
+  const roads: RoadSegment[] = [];
+  const seen = new Set<string>();
 
-    const chanceRoll = hashToUnit(hashCoords(pair.pairHash, 11, 17, 601));
-    if (!interVillage.forceNearestConnections && chanceRoll > interVillage.pairChanceThreshold) {
-      continue;
-    }
-
-    const connector = buildConnectorRoad(pair);
-    if (!interVillage.forceNearestConnections) {
-      if (!canUseStage4Road(connector, roads, houses, terrain, stage4.connectorRoadDistanceMultiplier, stage4.connectorHouseClearanceExtra, {
-        allowLastPointTouch: true
-      })) {
+  for (const site of sourceSites) {
+    const siteRoads = continuityRoadsForSite(context, site, planSeed);
+    for (const road of siteRoads) {
+      if (seen.has(road.id)) {
         continue;
       }
-    }
-
-    roads.push(connector);
-    if (stage4.spawnHousesOnConnectors) {
-      growHousesAlongRoad({
-        site,
-        road: connector,
-        slotCount: stage4.connectorGrowthHouseSlotCount,
-        roads,
-        houses,
-        seed: pair.pairHash ^ 0x7f4a7c15,
-        threshold: stage4.connectorGrowthHouseThreshold,
-        terrain
-      });
-    }
-    connectorAdded += 1;
-    connectedPairs.add(pair.pairKey);
-  }
-
-  if (extensions.maxPerVillage > 0 && connectorAdded < connectorTarget) {
-    for (const neighbor of eligibleNeighbors) {
-      if (extensionAdded >= extensions.maxPerVillage || connectorAdded + extensionAdded >= connectorTarget) {
-        break;
-      }
-
-      const pair = buildPair(site, trunk, neighbor, planSeed, interVillage.minDistance);
-      if (!pair || connectedPairs.has(pair.pairKey)) {
+      if (!roadIntersectsBounds(road, minX - drawPadding, maxX + drawPadding, minY - drawPadding, maxY + drawPadding)) {
         continue;
       }
-
-      const extensionChanceRoll = hashToUnit(hashCoords(pair.pairHash, 59, 61, 619));
-      if (extensionChanceRoll > extensions.attemptChanceThreshold) {
-        continue;
-      }
-
-      const extensionLengthBase = pair.span * extensions.targetSpanFraction;
-      const extensionLength = Math.max(extensions.minLength, Math.min(extensions.maxLength, extensionLengthBase));
-      const angle = Math.atan2(pair.remoteAnchor.y - pair.localAnchor.y, pair.remoteAnchor.x - pair.localAnchor.x);
-      const angleJitter = (hashToUnit(hashCoords(pair.pairHash, 67, 71, 631)) * 2 - 1) * extensions.angleJitterMaxRad;
-      const extension = createDirectionalRoad(
-        `rve-${pair.pairKey}`,
-        "branch",
-        V2_SETTLEMENT_CONFIG.roads.width,
-        pair.localAnchor.x,
-        pair.localAnchor.y,
-        angle + angleJitter,
-        extensionLength,
-        hashCoords(pair.pairHash, 73, 79, 641)
-      );
-
-      if (!canUseStage4Road(extension, roads, houses, terrain, extensions.roadDistanceMultiplier, extensions.houseClearanceExtra)) {
-        continue;
-      }
-
-      roads.push(extension);
-      if (extensions.spawnHouses) {
-        growHousesAlongRoad({
-          site,
-          road: extension,
-          slotCount: extensions.growthHouseSlotCount,
-          roads,
-          houses,
-          seed: pair.pairHash ^ 0x4f1bbcdc,
-          threshold: extensions.growthHouseThreshold,
-          terrain
-        });
-      }
-      extensionAdded += 1;
-      connectedPairs.add(pair.pairKey);
+      seen.add(road.id);
+      roads.push(road);
     }
   }
 
-  const remainingTarget = connectorTarget - (connectorAdded + extensionAdded);
-  if (remainingTarget > 0 && outbound.maxPerVillage > 0) {
-    outboundAdded = addOutboundRoads({
-      site,
-      trunk,
-      roads,
-      houses,
-      planSeed,
-      terrain,
-      maxToAdd: Math.min(remainingTarget, outbound.maxPerVillage)
-    });
-  }
-
-  return connectorAdded + extensionAdded + outboundAdded;
+  roads.sort((a, b) => a.id.localeCompare(b.id));
+  return roads;
 };
 
-const resolveConnectorTargetCount = (site: VillageSite, planSeed: number): number => {
-  const interVillage = V2_SETTLEMENT_CONFIG.stage4.interVillage;
-  const min = Math.max(0, Math.min(interVillage.nearestTargetCountMin, interVillage.maxPerVillage));
-  const max = Math.max(min, Math.min(interVillage.nearestTargetCountMax, interVillage.maxPerVillage));
-  if (max <= 0) {
-    return 0;
+export const addInterVillageConnectors = ({ site, roads, continuityRoads }: AddInterVillageConnectorsParams): number => {
+  // Stage 4 now links villages by emitting village-seeded continuity roads from each trunk endpoint.
+  // Connector metric reflects how many continuity spines belong to this village and are visible nearby.
+  const prefix = `rvc-${site.id}-`;
+  let connected = 0;
+  for (const road of continuityRoads) {
+    if (!road.id.startsWith(prefix)) {
+      continue;
+    }
+    if (polylineLength(road.points) < V2_SETTLEMENT_CONFIG.stage4.continuity.minRoadLength * 0.55) {
+      continue;
+    }
+    if (roads.some((existing) => existing.id === road.id)) {
+      continue;
+    }
+    connected += 1;
   }
-  if (min === max) {
-    return min;
-  }
-  const roll = hashToUnit(hashCoords(planSeed, site.cellX * 83 + 41, site.cellY * 97 + 47, 887));
-  const range = max - min + 1;
-  return min + Math.floor(roll * range);
+  return connected;
 };
 
-const buildPair = (
+const continuityRoadsForSite = (
+  context: Stage4ContinuityContext,
+  site: VillageSite,
+  planSeed: number
+): RoadSegment[] => {
+  const cached = context.roadCache.get(site.id);
+  if (cached) {
+    return cached;
+  }
+
+  const trunk = buildTrunkRoad(site, planSeed);
+  const roads: RoadSegment[] = [];
+
+  const sideA = buildContinuityRoadFromTrunkEndpoint(context, site, trunk, planSeed, 0);
+  if (sideA) {
+    roads.push(sideA);
+  }
+
+  const sideB = buildContinuityRoadFromTrunkEndpoint(context, site, trunk, planSeed, 1);
+  if (sideB) {
+    roads.push(sideB);
+  }
+
+  context.roadCache.set(site.id, roads);
+  return roads;
+};
+
+const buildContinuityRoadFromTrunkEndpoint = (
+  context: Stage4ContinuityContext,
   site: VillageSite,
   trunk: RoadSegment,
-  neighbor: VillageSite,
   planSeed: number,
-  minDistance: number
-): PairBuild | null => {
-  const lowId = site.id < neighbor.id ? site.id : neighbor.id;
-  const highId = site.id < neighbor.id ? neighbor.id : site.id;
-  const pairKey = `${lowId}|${highId}`;
-  const pairHash = hashString(`${pairKey}:connector`);
+  side: 0 | 1
+): RoadSegment | null => {
+  const continuity = V2_SETTLEMENT_CONFIG.stage4.continuity;
+  const sideHash = hashString(`${site.id}:stage4:continuity:${side}:${planSeed}`);
+  const sampleT = side === 0 ? continuity.endpointSampleT : 1 - continuity.endpointSampleT;
+  const sample = sampleRoad(trunk.points, sampleT);
+  const start = side === 0 ? trunk.points[0] : trunk.points[trunk.points.length - 1];
 
-  const localAnchorRoad = trunk;
-  const localAnchor = closestPointOnRoad(localAnchorRoad, neighbor.x, neighbor.y).point;
-  const neighborTrunk = buildTrunkRoad(neighbor, planSeed);
-  const remoteAnchor = closestPointOnRoad(neighborTrunk, site.x, site.y).point;
-  const span = Math.hypot(remoteAnchor.x - localAnchor.x, remoteAnchor.y - localAnchor.y);
-  if (span < minDistance * 0.72) {
+  let dirX = side === 0 ? -sample.tangentX : sample.tangentX;
+  let dirY = side === 0 ? -sample.tangentY : sample.tangentY;
+  const dirLen = Math.hypot(dirX, dirY);
+  if (dirLen <= 1e-6) {
+    dirX = 1;
+    dirY = 0;
+  } else {
+    dirX /= dirLen;
+    dirY /= dirLen;
+  }
+
+  const segmentCountRoll = hashToUnit(hashCoords(sideHash, 11, 13, 1601));
+  const segmentCount =
+    continuity.segmentCountMin +
+    Math.floor(segmentCountRoll * (continuity.segmentCountMax - continuity.segmentCountMin + 1));
+
+  const points: Point[] = [start];
+  let current = start;
+
+  for (let segment = 0; segment < segmentCount; segment += 1) {
+    const preferred = preferredDirection(context, sideHash, current.x, current.y, dirX, dirY, segment);
+    const next = pickFeasibleStep(context, sideHash, current, preferred.x, preferred.y, segment);
+    if (!next) {
+      break;
+    }
+    points.push(next.point);
+    current = next.point;
+    dirX = next.dirX;
+    dirY = next.dirY;
+  }
+
+  if (points.length < 4 || polylineLength(points) < continuity.minRoadLength) {
     return null;
   }
 
   return {
-    pairKey,
-    pairHash,
-    span,
-    localAnchor,
-    remoteAnchor
-  };
-};
-
-const buildConnectorRoad = (pair: PairBuild): RoadSegment => {
-  const normalX = -(pair.remoteAnchor.y - pair.localAnchor.y) / Math.max(1, pair.span);
-  const normalY = (pair.remoteAnchor.x - pair.localAnchor.x) / Math.max(1, pair.span);
-  const bend = (hashToUnit(hashCoords(pair.pairHash, 23, 29, 607)) * 2 - 1) * Math.min(24, pair.span * 0.16);
-  const mid = {
-    x: (pair.localAnchor.x + pair.remoteAnchor.x) * 0.5 + normalX * bend,
-    y: (pair.localAnchor.y + pair.remoteAnchor.y) * 0.5 + normalY * bend
-  };
-
-  return {
-    id: `rv-${pair.pairKey}`,
+    id: `rvc-${site.id}-${side}`,
     className: "branch",
     width: V2_SETTLEMENT_CONFIG.roads.width,
-    points: [pair.localAnchor, mid, pair.remoteAnchor]
+    points
   };
 };
 
-type AddOutboundRoadsParams = {
-  site: VillageSite;
-  trunk: RoadSegment;
-  roads: RoadSegment[];
-  houses: House[];
-  planSeed: number;
-  terrain: V2TerrainSampler;
-  maxToAdd: number;
-};
+const preferredDirection = (
+  context: Stage4ContinuityContext,
+  sideHash: number,
+  x: number,
+  y: number,
+  prevDirX: number,
+  prevDirY: number,
+  segment: number
+): { x: number; y: number } => {
+  const continuity = V2_SETTLEMENT_CONFIG.stage4.continuity;
+  const g = continuity.gradientStep;
+  const gx = context.terrain.elevationAt(x + g, y) - context.terrain.elevationAt(x - g, y);
+  const gy = context.terrain.elevationAt(x, y + g) - context.terrain.elevationAt(x, y - g);
 
-const addOutboundRoads = ({ site, trunk, roads, houses, planSeed, terrain, maxToAdd }: AddOutboundRoadsParams): number => {
-  const outbound = V2_SETTLEMENT_CONFIG.stage4.outbound;
-  const attemptBudget = Math.max(maxToAdd * 8, 8);
-  let added = 0;
-
-  for (let i = 0; i < attemptBudget; i += 1) {
-    if (added >= maxToAdd) {
-      break;
-    }
-    const attemptHash = hashCoords(planSeed, site.cellX * 157 + i * 13, site.cellY * 163 + i * 17, 991);
-    const roll = hashToUnit(hashCoords(attemptHash, 2, 3, 997));
-    if (roll > outbound.attemptChanceThreshold) {
-      continue;
-    }
-
-    const t = lerp(outbound.anchorTMin, outbound.anchorTMax, hashToUnit(hashCoords(attemptHash, 5, 7, 1009)));
-    const anchor = sampleRoad(trunk.points, t);
-    const baseAngle = Math.atan2(anchor.tangentY, anchor.tangentX);
-    const sign: -1 | 1 = hashToUnit(hashCoords(attemptHash, 11, 13, 1013)) < 0.5 ? -1 : 1;
-    const turn = lerp(outbound.minTurnRad, outbound.maxTurnRad, hashToUnit(hashCoords(attemptHash, 17, 19, 1021))) * sign;
-    const length = lerp(outbound.minLength, outbound.maxLength, hashToUnit(hashCoords(attemptHash, 23, 29, 1031)));
-    const outboundRoad = createDirectionalRoad(
-      `rvo-${site.id}-${i}`,
-      "branch",
-      V2_SETTLEMENT_CONFIG.roads.width,
-      anchor.x,
-      anchor.y,
-      baseAngle + turn,
-      length,
-      attemptHash
-    );
-
-    if (!canUseStage4Road(outboundRoad, roads, houses, terrain, outbound.roadDistanceMultiplier, outbound.houseClearanceExtra)) {
-      continue;
-    }
-
-    roads.push(outboundRoad);
-    if (outbound.spawnHouses) {
-      growHousesAlongRoad({
-        site,
-        road: outboundRoad,
-        slotCount: outbound.growthHouseSlotCount,
-        roads,
-        houses,
-        seed: attemptHash ^ 0x2f6e2b1d,
-        threshold: outbound.growthHouseThreshold,
-        terrain
-      });
-    }
-    added += 1;
+  let contourX = -gy;
+  let contourY = gx;
+  const contourLen = Math.hypot(contourX, contourY);
+  if (contourLen > 1e-6) {
+    contourX /= contourLen;
+    contourY /= contourLen;
+  } else {
+    contourX = prevDirX;
+    contourY = prevDirY;
   }
 
-  return added;
+  if (contourX * prevDirX + contourY * prevDirY < 0) {
+    contourX = -contourX;
+    contourY = -contourY;
+  }
+
+  const noiseValue = fbm2D(context.fieldSeed, x * continuity.noiseFrequency, y * continuity.noiseFrequency, {
+    octaves: 3,
+    persistence: 0.56,
+    lacunarity: 2.1
+  });
+  const extraTurn = (hashToUnit(hashCoords(sideHash, segment * 31 + 17, segment * 37 + 23, 1613)) - 0.5) * 0.5;
+  const noiseTurn = (noiseValue - 0.5) * Math.PI * 1.35 + extraTurn;
+  const prevAngle = Math.atan2(prevDirY, prevDirX);
+  const noiseAngle = prevAngle + noiseTurn;
+  const noiseX = Math.cos(noiseAngle);
+  const noiseY = Math.sin(noiseAngle);
+
+  const desiredX =
+    prevDirX * continuity.previousDirectionInfluence +
+    contourX * continuity.contourInfluence +
+    noiseX * continuity.noiseInfluence;
+  const desiredY =
+    prevDirY * continuity.previousDirectionInfluence +
+    contourY * continuity.contourInfluence +
+    noiseY * continuity.noiseInfluence;
+
+  const normalized = normalizeWithFallback(desiredX, desiredY, prevDirX, prevDirY);
+  return limitTurn(prevDirX, prevDirY, normalized.x, normalized.y, continuity.maxTurnRadPerStep);
 };
 
-const canUseStage4Road = (
+const pickFeasibleStep = (
+  context: Stage4ContinuityContext,
+  sideHash: number,
+  current: Point,
+  preferredDirX: number,
+  preferredDirY: number,
+  segment: number
+): StepCandidate | null => {
+  const continuity = V2_SETTLEMENT_CONFIG.stage4.continuity;
+  const lengthRoll = hashToUnit(hashCoords(sideHash, segment * 41 + 7, segment * 43 + 11, 1627));
+  const length = lerp(continuity.segmentLengthMin, continuity.segmentLengthMax, lengthRoll);
+  const tryCount = Math.max(1, continuity.candidateTurnTries);
+
+  const offsetAngles: number[] = [0];
+  for (let i = 1; i <= tryCount; i += 1) {
+    offsetAngles.push(i * continuity.candidateTurnStepRad);
+    offsetAngles.push(-i * continuity.candidateTurnStepRad);
+  }
+
+  for (const offsetAngle of offsetAngles) {
+    const turned = rotateUnit(preferredDirX, preferredDirY, offsetAngle);
+    const next = {
+      x: current.x + turned.x * length,
+      y: current.y + turned.y * length
+    };
+    if (context.terrain.slopeAt(next.x, next.y) > continuity.maxSlope) {
+      continue;
+    }
+    return {
+      point: next,
+      dirX: turned.x,
+      dirY: turned.y
+    };
+  }
+
+  return null;
+};
+
+const normalizeWithFallback = (x: number, y: number, fallbackX: number, fallbackY: number): { x: number; y: number } => {
+  const len = Math.hypot(x, y);
+  if (len <= 1e-6) {
+    const fallbackLen = Math.hypot(fallbackX, fallbackY);
+    if (fallbackLen <= 1e-6) {
+      return { x: 1, y: 0 };
+    }
+    return { x: fallbackX / fallbackLen, y: fallbackY / fallbackLen };
+  }
+  return { x: x / len, y: y / len };
+};
+
+const rotateUnit = (x: number, y: number, angle: number): { x: number; y: number } => {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: x * cos - y * sin,
+    y: x * sin + y * cos
+  };
+};
+
+const limitTurn = (
+  prevX: number,
+  prevY: number,
+  desiredX: number,
+  desiredY: number,
+  maxTurnRad: number
+): { x: number; y: number } => {
+  const prevAngle = Math.atan2(prevY, prevX);
+  const desiredAngle = Math.atan2(desiredY, desiredX);
+  const delta = shortestAngleDelta(prevAngle, desiredAngle);
+  const clamped = clamp(delta, -maxTurnRad, maxTurnRad);
+  return {
+    x: Math.cos(prevAngle + clamped),
+    y: Math.sin(prevAngle + clamped)
+  };
+};
+
+const shortestAngleDelta = (from: number, to: number): number => {
+  const twoPi = Math.PI * 2;
+  let delta = (to - from) % twoPi;
+  if (delta > Math.PI) {
+    delta -= twoPi;
+  }
+  if (delta < -Math.PI) {
+    delta += twoPi;
+  }
+  return delta;
+};
+
+const roadIntersectsBounds = (
   road: RoadSegment,
-  roads: RoadSegment[],
-  houses: House[],
-  terrain: V2TerrainSampler,
-  roadDistanceMultiplier: number,
-  houseClearanceExtra: number,
-  options?: { allowLastPointTouch?: boolean }
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number
 ): boolean => {
-  if (hasParallelRoadConflict(road, roads)) {
-    return false;
+  let roadMinX = Number.POSITIVE_INFINITY;
+  let roadMaxX = Number.NEGATIVE_INFINITY;
+  let roadMinY = Number.POSITIVE_INFINITY;
+  let roadMaxY = Number.NEGATIVE_INFINITY;
+
+  for (const point of road.points) {
+    if (point.x < roadMinX) roadMinX = point.x;
+    if (point.x > roadMaxX) roadMaxX = point.x;
+    if (point.y < roadMinY) roadMinY = point.y;
+    if (point.y > roadMaxY) roadMaxY = point.y;
   }
-  if (
-    !isRoadUsable(
-      road.points,
-      roads,
-      V2_SETTLEMENT_CONFIG.roads.branch.minDistance * roadDistanceMultiplier,
-      terrain,
-      options
-    )
-  ) {
-    return false;
-  }
-  if (
-    isRoadNearHouses(
-      road.points,
-      houses,
-      V2_SETTLEMENT_CONFIG.stage3.branching.houseClearance + houseClearanceExtra
-    )
-  ) {
-    return false;
-  }
-  return true;
+
+  return !(roadMaxX < minX || roadMinX > maxX || roadMaxY < minY || roadMinY > maxY);
 };

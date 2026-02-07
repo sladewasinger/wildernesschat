@@ -105,48 +105,43 @@ export const V2_SETTLEMENT_CONFIG = {
     }
   },
   stage4: {
-    interVillage: {
-      minDistance: 280,
-      maxDistance: 1120,
-      maxPerVillage: 3,
-      pairChanceThreshold: 0.9,
-      nearestTargetCountMin: 1,
-      nearestTargetCountMax: 3,
-      forceNearestConnections: true
+    continuity: {
+      sourceSitePadding: 1380,
+      boundsPadding: 300,
+      endpointSampleT: 0.06,
+      segmentLengthMin: 112,
+      segmentLengthMax: 172,
+      segmentCountMin: 7,
+      segmentCountMax: 12,
+      minRoadLength: 560,
+      gradientStep: 24,
+      previousDirectionInfluence: 0.5,
+      contourInfluence: 0.42,
+      noiseInfluence: 0.24,
+      noiseFrequency: 0.00058,
+      maxTurnRadPerStep: 0.42,
+      candidateTurnTries: 3,
+      candidateTurnStepRad: 0.24,
+      maxSlope: 0.11
+    },
+    attachments: {
+      maxPerVillage: 2,
+      targetCountMin: 1,
+      targetCountMax: 2,
+      searchRadius: 980,
+      minAttachDistance: 36,
+      maxAttachDistance: 430,
+      anchorSampleCount: 5,
+      anchorTMin: 0.12,
+      anchorTMax: 0.88,
+      anchorTJitter: 0.06,
+      roadDistanceMultiplier: 0.72,
+      houseClearanceExtra: 2,
+      maxBend: 28
     },
     spawnHousesOnConnectors: false,
-    connectorRoadDistanceMultiplier: 0.65,
-    connectorHouseClearanceExtra: 2,
     connectorGrowthHouseSlotCount: 6,
-    connectorGrowthHouseThreshold: 0.66,
-    extensions: {
-      maxPerVillage: 1,
-      attemptChanceThreshold: 0.72,
-      targetSpanFraction: 0.48,
-      minLength: 120,
-      maxLength: 280,
-      angleJitterMaxRad: 0.2,
-      roadDistanceMultiplier: 0.82,
-      houseClearanceExtra: 3,
-      growthHouseSlotCount: 4,
-      growthHouseThreshold: 0.69,
-      spawnHouses: false
-    },
-    outbound: {
-      maxPerVillage: 2,
-      attemptChanceThreshold: 0.78,
-      anchorTMin: 0.14,
-      anchorTMax: 0.86,
-      minTurnRad: 0.35,
-      maxTurnRad: 0.92,
-      minLength: 260,
-      maxLength: 520,
-      roadDistanceMultiplier: 0.9,
-      houseClearanceExtra: 4,
-      spawnHouses: false,
-      growthHouseSlotCount: 4,
-      growthHouseThreshold: 0.7
-    }
+    connectorGrowthHouseThreshold: 0.66
   }
 } as const;
 

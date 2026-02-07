@@ -119,13 +119,12 @@ This project uses deterministic procedural generation with clear module boundari
 - `src/v2/generator/shortcuts.ts`
   - Stage 3 shortcut link synthesis between branch endpoints.
 - `src/v2/generator/inter-village.ts`
-  - Current Stage 4 experiment: nearest-village connection targeting with fallback outward connector roads.
-  - Known gap: user-visible Stage 4 impact is still inconsistent during exploration.
-  - Next pivot target: road-first continuity generation (long deterministic roads that persist across travel, with villages attaching to roads).
+  - Stage 4 road-first continuity generation with village-seeded, terrain-following long roads.
+  - Exposes continuity-road queries by bounds/near-site so long roads persist during exploration.
 - `src/v2/generator/geometry.ts`
   - Shared road/segment geometry sampling, spacing checks, and alignment/reuse heuristics.
 - `src/v2/app.ts`
-  - Rendering, stage controls (`1-5` or `[ ]`), and per-site stage metrics HUD (branches/shortcuts/connectors).
+  - Rendering, stage controls (`1-5` or `[ ]`), Stage 4 continuity-road draw pass, and per-site stage metrics HUD (branches/shortcuts/connectors).
 
 ## Legacy
 
