@@ -149,18 +149,22 @@ export class V2App {
     const minY = this.playerY - viewHeight * 0.5 - margin;
     const maxY = this.playerY + viewHeight * 0.5 + margin;
     const sites = this.generator.collectSitesInBounds(minX, maxX, minY, maxY);
+    const roadsToDraw: RoadSegment[] = [];
+    const housesToDraw: House[] = [];
     if (this.stage >= 4) {
       const continuityRoads = this.generator.collectStage4ContinuityRoadsInBounds(minX, maxX, minY, maxY);
-      this.drawRoads(continuityRoads, viewMinX, viewMinY);
+      roadsToDraw.push(...continuityRoads);
     }
     const planBySiteId = new Map<string, ReturnType<V2SettlementGenerator["buildVillagePlan"]>>();
 
     for (const site of sites) {
       const plan = this.generator.buildVillagePlan(site, this.stage);
       planBySiteId.set(site.id, plan);
-      this.drawRoads(plan.roads, viewMinX, viewMinY);
-      this.drawHouses(plan.houses, viewMinX, viewMinY);
+      roadsToDraw.push(...plan.roads);
+      housesToDraw.push(...plan.houses);
     }
+    this.drawRoads(roadsToDraw, viewMinX, viewMinY);
+    this.drawHouses(housesToDraw, viewMinX, viewMinY);
 
     const viewMaxX = viewMinX + viewWidth;
     const viewMaxY = viewMinY + viewHeight;
