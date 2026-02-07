@@ -204,6 +204,9 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [ ] Complete Stage 1-3 quality bar (no duplicate near-parallel branches, no local road tangles, stable spacing).
 - [x] Refactor V2 generator into maintainable submodules with a thin `src/v2/generator.ts` facade.
 - [x] Add stage-observability HUD metrics (branches/shortcuts/connectors) to make Stage 4 effects explicit.
+- [x] Add manual-placement bridge guardrail: suppress same-road bridge creation unless gap and detour-alpha thresholds justify it (reuse existing roads first).
+- [x] Extend bridge guardrail to network detour-alpha suppression (sampled road graph); skip bridge if existing network route is already efficient.
+- [ ] Replace ad-hoc bridge candidate selection with global road-reuse routing (paper-style alpha/detour policy over a unified road graph).
 - [ ] Promote validated V2 systems into main pipeline incrementally.
 
 ## Progress Checklist

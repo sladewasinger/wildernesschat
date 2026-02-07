@@ -7,7 +7,9 @@ import {
   createManualRoadToAttachment,
   findBridgeAttachmentForHouse,
   findRoadAttachmentCandidatesForHouse,
-  findClosestRoadAttachmentForHouse
+  findClosestRoadAttachmentForHouse,
+  roadDetourAlphaBetweenAttachments,
+  roadNetworkDetourAlphaBetweenAttachments
 } from "./generator/manual-placement";
 import { V2TerrainSampler } from "./terrain";
 import { V2_RENDER_CONFIG, V2_SETTLEMENT_CONFIG, V2_STAGE_MAX, V2_STAGE_MIN, V2_VIEW_CONFIG } from "./config";
@@ -432,11 +434,34 @@ export class V2App {
     const hasExistingRoads = this.manualRoads.length > 0;
     const nearRoadFacingDistance = 168;
     const searchRadius = hasExistingRoads ? Number.POSITIVE_INFINITY : previous ? Math.max(24, Math.hypot(previous.x - house.x, previous.y - house.y)) : 0;
+    const terrainHouse = createManualHouseAt(house.id, house.x, house.y, this.terrain, []);
+    if (hasExistingRoads) {
+      const extension = this.tryBuildRoadExtensionConnection(terrainHouse, id);
+      if (extension) {
+        return extension;
+      }
+    }
     const attachCandidates = hasExistingRoads ? findRoadAttachmentCandidatesForHouse(house, this.manualRoads, searchRadius, 14) : [];
     if (attachCandidates.length > 0) {
       for (const attach of attachCandidates) {
         const bridgeAttach = findBridgeAttachmentForHouse(house, this.manualRoads, attach, Math.max(searchRadius + 18, searchRadius * 1.22));
         if (bridgeAttach) {
+          const bridgeGap = Math.hypot(attach.point.x - bridgeAttach.point.x, attach.point.y - bridgeAttach.point.y);
+          if (bridgeGap >= V2_SETTLEMENT_CONFIG.manualPlacement.bridgeMinGap) {
+            const sameRoad = attach.roadId === bridgeAttach.roadId;
+            if (sameRoad) {
+              if (bridgeGap < V2_SETTLEMENT_CONFIG.manualPlacement.bridgeSameRoadMinGap) {
+                continue;
+              }
+              const detourAlpha = roadDetourAlphaBetweenAttachments(this.manualRoads, attach, bridgeAttach);
+              if (detourAlpha !== null && detourAlpha < V2_SETTLEMENT_CONFIG.manualPlacement.bridgeSameRoadDetourAlpha) {
+                continue;
+              }
+            }
+            const networkDetourAlpha = roadNetworkDetourAlphaBetweenAttachments(this.manualRoads, attach, bridgeAttach);
+            if (networkDetourAlpha !== null && networkDetourAlpha < V2_SETTLEMENT_CONFIG.manualPlacement.bridgeNetworkDetourAlpha) {
+              continue;
+            }
           const bridgeRoad = createManualBridgeRoadBetweenAttachments(`${id}-bridge`, attach, bridgeAttach, this.terrain);
           if (bridgeRoad && !this.roadIntersectsHouses(bridgeRoad, this.manualHouses, new Set())) {
             const orientedHouse = this.orientHouseTowardRoad(house, bridgeRoad);
@@ -459,6 +484,7 @@ export class V2App {
                 };
               }
             }
+          }
           }
         }
 
@@ -539,6 +565,151 @@ export class V2App {
     return {
       ...house,
       angle: Math.atan2(dy, dx)
+    };
+  }
+
+  private tryBuildRoadExtensionConnection(
+    house: House,
+    id: string
+  ): {
+    house: House | null;
+    road: RoadSegment | null;
+    secondaryRoad: RoadSegment | null;
+    mode: ManualConnectionMode;
+    attachPoint: Point | null;
+    secondaryAttachPoint: Point | null;
+    searchRadius: number;
+  } | null {
+    const endpoint = this.findRoadEndpointExtensionTarget(house);
+    if (!endpoint) {
+      return null;
+    }
+
+    const extensionRoad: RoadSegment = {
+      id: `${id}-extend`,
+      className: "trunk",
+      width: V2_SETTLEMENT_CONFIG.roads.width,
+      points: [endpoint.start, endpoint.end]
+    };
+    if (this.roadIntersectsHouses(extensionRoad, this.manualHouses, new Set())) {
+      return null;
+    }
+
+    const orientedHouse = this.orientHouseTowardRoad(house, extensionRoad);
+    const drivewayAttach = findClosestRoadAttachmentForHouse(
+      orientedHouse,
+      [extensionRoad],
+      Math.max(46, endpoint.distanceToHouse + 38)
+    );
+    if (!drivewayAttach) {
+      return null;
+    }
+    const drivewayRoad = createManualRoadToAttachment(id, orientedHouse, drivewayAttach, this.terrain);
+    if (!drivewayRoad) {
+      return null;
+    }
+    if (this.roadIntersectsHouses(drivewayRoad, this.manualHouses, new Set([orientedHouse.id]))) {
+      return null;
+    }
+
+    return {
+      house: orientedHouse,
+      road: drivewayRoad,
+      secondaryRoad: extensionRoad,
+      mode: "attach-road",
+      attachPoint: drivewayAttach.point,
+      secondaryAttachPoint: endpoint.start,
+      searchRadius: Number.POSITIVE_INFINITY
+    };
+  }
+
+
+  private findRoadEndpointExtensionTarget(house: House): { start: Point; end: Point; distanceToHouse: number } | null {
+    let best:
+      | {
+          start: Point;
+          end: Point;
+          distanceToHouse: number;
+          score: number;
+        }
+      | null = null;
+
+    for (const road of this.manualRoads) {
+      if (road.points.length < 2) {
+        continue;
+      }
+      const start = road.points[0];
+      const startNext = road.points[1];
+      const end = road.points[road.points.length - 1];
+      const endPrev = road.points[road.points.length - 2];
+
+      const startOut = this.normalizeDirection(start.x - startNext.x, start.y - startNext.y);
+      if (startOut) {
+        const candidate = this.evaluateRoadEndpointForExtension(house, start, startOut);
+        if (candidate && (!best || candidate.score < best.score)) {
+          best = candidate;
+        }
+      }
+
+      const endOut = this.normalizeDirection(end.x - endPrev.x, end.y - endPrev.y);
+      if (endOut) {
+        const candidate = this.evaluateRoadEndpointForExtension(house, end, endOut);
+        if (candidate && (!best || candidate.score < best.score)) {
+          best = candidate;
+        }
+      }
+    }
+
+    if (!best) {
+      return null;
+    }
+    return {
+      start: best.start,
+      end: best.end,
+      distanceToHouse: best.distanceToHouse
+    };
+  }
+
+  private evaluateRoadEndpointForExtension(
+    house: House,
+    endpoint: Point,
+    outward: Point
+  ): { start: Point; end: Point; distanceToHouse: number; score: number } | null {
+    const toHouseX = house.x - endpoint.x;
+    const toHouseY = house.y - endpoint.y;
+    const along = toHouseX * outward.x + toHouseY * outward.y;
+    if (along < 36) {
+      return null;
+    }
+    const lateral = Math.abs(toHouseX * outward.y - toHouseY * outward.x);
+    if (lateral > Math.max(24, along * 0.52)) {
+      return null;
+    }
+
+    const extensionLen = clamp(along, 40, 240);
+    const end: Point = {
+      x: endpoint.x + outward.x * extensionLen,
+      y: endpoint.y + outward.y * extensionLen
+    };
+    const distanceToHouse = Math.hypot(house.x - end.x, house.y - end.y);
+    const score = lateral * 2 + distanceToHouse * 0.7 + Math.abs(extensionLen - along) * 0.15;
+
+    return {
+      start: endpoint,
+      end,
+      distanceToHouse,
+      score
+    };
+  }
+
+  private normalizeDirection(x: number, y: number): Point | null {
+    const len = Math.hypot(x, y);
+    if (len <= 1e-6) {
+      return null;
+    }
+    return {
+      x: x / len,
+      y: y / len
     };
   }
 
