@@ -1,6 +1,6 @@
 # Organic Village Generator (Pivot In Progress)
 
-This repo is now running an organic terrain/water/settlement generator (Phase 0-4 early) toward a Watabou-style village/countryside map.
+This repo is now running an organic terrain/water/settlement generator (Phase 0-4 parcels) toward a Watabou-style village/countryside map.
 
 The old image-trained WFC modules are still in `src/wfc/*` as legacy reference, but they are no longer used by runtime.
 
@@ -18,10 +18,11 @@ Open `http://localhost:5173`.
 - `seed` (default `watabou-like-prototype`)
 - `chunkSize` in pixels (default `320`, allowed `180..640`)
 - `seaLevel` (default from config, allowed `0.3..0.68`)
+- `sampleStep` terrain sampling step (default `2`, allowed `1..8`; higher is faster/blockier)
 
 Example:
 
-`http://localhost:5173/?seed=coastal-village&chunkSize=320&seaLevel=0.51`
+`http://localhost:5173/?seed=coastal-village&chunkSize=320&seaLevel=0.51&sampleStep=2`
 
 ## Runtime Controls
 
@@ -35,6 +36,7 @@ Example:
 - `6` roads
 - `7` village markers
 - `8` houses
+- `9` parcels
 
 ## Current Generator Layers
 
@@ -42,13 +44,18 @@ Example:
 - Water: sea-level masking + rivers
 - Settlements: deterministic suitability scoring + spacing
 - Roads: regional graph (MST + loop edges) with curved routing
-- Houses: procedural roadside footprints aligned to road tangents
+- Parcels: roadside lot generation for village blocks/frontage
+- Houses: parcel-based placement aligned to road-facing lots
 
 Notes:
 
 - Contours are optional styling; toggle with `4`.
 - Moisture is an ecological scalar used by forests/settlements, not a direct water depth indicator.
-- When any mask view is active (`1`/`2`/`3`), decorative layers are hidden so the mask reads clearly.
+- When any mask view is active (`1`/`2`/`3`), decorative layers (roads/parcels/houses/trees) are hidden so the mask reads clearly.
+
+## Structure
+
+See `ARCHITECTURE.md` for module boundaries and generation pipeline organization.
 
 ## Pivot Plan
 

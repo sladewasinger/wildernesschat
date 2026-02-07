@@ -9,9 +9,10 @@ const run = (): void => {
   if (!canvas || !hud) throw new Error("Missing #game canvas or #hud element.");
 
   const params = new URLSearchParams(window.location.search);
-  const seed = params.get("seed") ?? "12345abcde";
+  const seed = params.get("seed") ?? "watabou-like-prototype";
   const chunkSize = Number(params.get("chunkSize") ?? "320");
   const seaLevel = Number(params.get("seaLevel") ?? "NaN");
+  const sampleStep = Number(params.get("sampleStep") ?? "2");
 
   const config = defaultWorldConfig(seed);
   if (Number.isFinite(chunkSize) && chunkSize >= 180 && chunkSize <= 640) {
@@ -19,6 +20,9 @@ const run = (): void => {
   }
   if (Number.isFinite(seaLevel) && seaLevel >= 0.3 && seaLevel <= 0.68) {
     config.terrain.seaLevel = seaLevel;
+  }
+  if (Number.isFinite(sampleStep) && sampleStep >= 1 && sampleStep <= 8) {
+    config.chunk.sampleStep = Math.floor(sampleStep);
   }
 
   const world = new World(config);

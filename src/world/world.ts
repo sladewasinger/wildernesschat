@@ -2,7 +2,7 @@ import { clamp, floorDiv, lerp, smoothstep } from "../util/math";
 import { DebugLayerConfig, WorldConfig } from "../gen/config";
 import { hashCoords, hashString, hashToUnit, mixUint32 } from "../gen/hash";
 import { RiverSystem } from "../gen/rivers";
-import { House, SettlementFeatures, SettlementSystem, Village } from "../gen/settlements";
+import { House, Parcel, SettlementFeatures, SettlementSystem, Village } from "../gen/settlements";
 import { TerrainProbe, TerrainSampler, createTerrainSampler } from "../gen/terrain";
 
 type Chunk = {
@@ -97,6 +97,7 @@ export class World {
 
   private renderChunk(chunkX: number, chunkY: number): HTMLCanvasElement {
     const chunkSize = this.getChunkSize();
+    const step = Math.max(1, this.config.chunk.sampleStep | 0);
     const startX = chunkX * chunkSize;
     const startY = chunkY * chunkSize;
     const canvas = document.createElement("canvas");
@@ -107,25 +108,36 @@ export class World {
       throw new Error("2D canvas context unavailable.");
     }
 
-    const image = ctx.createImageData(chunkSize, chunkSize);
-    const data = image.data;
-    let cursor = 0;
-
-    for (let y = 0; y < chunkSize; y += 1) {
-      for (let x = 0; x < chunkSize; x += 1) {
-        const worldX = startX + x;
-        const worldY = startY + y;
-        const terrain = this.terrain.sample(worldX, worldY);
-        const color = this.sampleColor(worldX, worldY, terrain);
-        data[cursor] = toByte(color.r);
-        data[cursor + 1] = toByte(color.g);
-        data[cursor + 2] = toByte(color.b);
-        data[cursor + 3] = 255;
-        cursor += 4;
+    if (step === 1) {
+      const image = ctx.createImageData(chunkSize, chunkSize);
+      const data = image.data;
+      let cursor = 0;
+      for (let y = 0; y < chunkSize; y += 1) {
+        for (let x = 0; x < chunkSize; x += 1) {
+          const worldX = startX + x;
+          const worldY = startY + y;
+          const terrain = this.terrain.sample(worldX, worldY);
+          const color = this.sampleColor(worldX, worldY, terrain);
+          data[cursor] = toByte(color.r);
+          data[cursor + 1] = toByte(color.g);
+          data[cursor + 2] = toByte(color.b);
+          data[cursor + 3] = 255;
+          cursor += 4;
+        }
+      }
+      ctx.putImageData(image, 0, 0);
+    } else {
+      for (let y = 0; y < chunkSize; y += step) {
+        for (let x = 0; x < chunkSize; x += step) {
+          const sampleX = startX + x + step * 0.5;
+          const sampleY = startY + y + step * 0.5;
+          const terrain = this.terrain.sample(sampleX, sampleY);
+          const color = this.sampleColor(sampleX, sampleY, terrain);
+          ctx.fillStyle = `rgb(${toByte(color.r)} ${toByte(color.g)} ${toByte(color.b)})`;
+          ctx.fillRect(x, y, Math.min(step, chunkSize - x), Math.min(step, chunkSize - y));
+        }
       }
     }
-
-    ctx.putImageData(image, 0, 0);
     const maskMode = this.debug.showWaterMask || this.debug.showMoisture || this.debug.showForestMask;
     if (maskMode) {
       if (this.debug.showRivers) {
@@ -143,6 +155,7 @@ export class World {
       startY + chunkSize + featureMargin
     );
     this.drawRoadsAndVillages(ctx, startX, startY, features);
+    this.drawParcels(ctx, startX, startY, features.parcels);
     this.drawHouses(ctx, startX, startY, features);
     this.drawForest(ctx, startX, startY, chunkSize);
     return canvas;
@@ -154,15 +167,13 @@ export class World {
     terrain: { elevation: number; moisture: number; waterDepth: number; shore: number }
   ): { r: number; g: number; b: number } {
     if (this.debug.showWaterMask) {
-      if (terrain.waterDepth > 0) {
-        const depth = clamp(terrain.waterDepth / 0.24, 0, 1);
-        return {
-          r: lerp(94, 14, depth),
-          g: lerp(130, 26, depth),
-          b: lerp(168, 60, depth)
-        };
+      if (terrain.waterDepth > 0.001) {
+        return { r: 84, g: 144, b: 212 };
       }
-      return { r: 155, g: 178, b: 144 };
+      if (terrain.shore > 0.48) {
+        return { r: 188, g: 210, b: 175 };
+      }
+      return { r: 159, g: 191, b: 145 };
     }
 
     if (this.debug.showMoisture) {
@@ -203,13 +214,10 @@ export class World {
     const noiseGrain = (hashToUnit(hashCoords(this.seedHash, worldX, worldY, 77)) - 0.5) * 7;
 
     if (terrain.waterDepth > 0) {
-      const depth = clamp(terrain.waterDepth / 0.24, 0, 1);
-      const coastal = terrain.shore;
-
       return {
-        r: lerp(105, 28, depth) + coastal * 20,
-        g: lerp(154, 70, depth) + coastal * 16,
-        b: lerp(202, 130, depth) + coastal * 8
+        r: 83,
+        g: 143,
+        b: 211
       };
     }
 
@@ -422,6 +430,26 @@ export class World {
       ctx.strokeStyle = "rgba(50, 60, 52, 0.82)";
       ctx.lineWidth = 1.8;
       ctx.stroke();
+    }
+  }
+
+  private drawParcels(ctx: CanvasRenderingContext2D, startX: number, startY: number, parcels: Parcel[]): void {
+    if (!this.debug.showParcels) {
+      return;
+    }
+
+    for (const parcel of parcels) {
+      const x = parcel.x - startX;
+      const y = parcel.y - startY;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(parcel.angle);
+      ctx.fillStyle = "rgba(211, 218, 167, 0.28)";
+      ctx.strokeStyle = "rgba(87, 104, 64, 0.46)";
+      ctx.lineWidth = 1;
+      ctx.fillRect(-parcel.width * 0.5, -parcel.depth * 0.5, parcel.width, parcel.depth);
+      ctx.strokeRect(-parcel.width * 0.5, -parcel.depth * 0.5, parcel.width, parcel.depth);
+      ctx.restore();
     }
   }
 

@@ -67,6 +67,7 @@ export type HouseConfig = {
 export type ChunkConfig = {
   pixelSize: number;
   maxCachedChunks: number;
+  sampleStep: number;
 };
 
 export type DebugLayerConfig = {
@@ -77,6 +78,7 @@ export type DebugLayerConfig = {
   showForestMask: boolean;
   showRoads: boolean;
   showVillages: boolean;
+  showParcels: boolean;
   showHouses: boolean;
 };
 
@@ -157,7 +159,8 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
     },
     chunk: {
       pixelSize: 320,
-      maxCachedChunks: 196
+      maxCachedChunks: 196,
+      sampleStep: 2
     },
     debug: {
       showContours: false,
@@ -167,6 +170,7 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
       showForestMask: false,
       showRoads: true,
       showVillages: true,
+      showParcels: false,
       showHouses: true
     }
   };
