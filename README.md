@@ -22,6 +22,8 @@ Open `http://localhost:5173`.
 - `superchunkSpan` settlement superchunk width in chunks (default from config, allowed `1..8`)
 - `genBudgetMs` chunk generation budget per frame in milliseconds (default from config, allowed `0.5..24`)
 - `maxChunkBuilds` max chunks generated per frame (default from config, allowed `1..8`)
+- `prefetchLookahead` ahead-of-player chunk distance to prefetch (default from config, allowed `0..8`)
+- `prefetchLateral` side padding in chunks for prefetch (default from config, allowed `0..6`)
 - `seamValidation` seam validator toggle (`1`/`0` or `true`/`false`)
 - `determinism` run determinism suite once at startup and log report (`1`/`0`)
 - `determinismRuns` repeat count when determinism suite is enabled (default `3`)
@@ -47,17 +49,17 @@ Example:
 ## Current Generator Layers
 
 - Terrain: domain-warped elevation + moisture
-- Water: sea-level masking + rivers
+- Water: unified raster layer from sea-level mask + river channels
 - Settlements: deterministic suitability scoring + spacing
 - Roads: regional graph (MST + loop edges) with curved routing
 - Local streets: village-axis-guided lanes and cross streets with reduced overlap
 - Parcels: roadside lot generation for village blocks/frontage
 - Houses: parcel-based placement aligned to road-facing lots
 - Fields: deterministic village-outskirt agricultural patches (first pass)
-- Forests: density-driven clustered tree rendering (stylized tree symbols)
+- Forests: top-down stylized tree canopies + dense canopy mass rendering
 - Land-use blending: tuned forest/field pressure from village and road proximity
-- Water/Road styling: bold outline-first rendering with river-width hierarchy and road-near-river culling
-- Streaming: queued chunk generation with frame-budget throttling + superchunk feature caching
+- Water/Road styling: bold outline-first rendering with river-width hierarchy and bridge spans at crossings
+- Streaming: queued chunk generation with frame-budget throttling + superchunk feature caching + directional prefetch
 - Multiplayer prep: canonical seed/config handshake hash + deterministic stable feature IDs
 
 Notes:

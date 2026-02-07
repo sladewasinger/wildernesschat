@@ -1,16 +1,41 @@
 import { DebugLayerConfig, WorldConfig } from "../../gen/config";
 import { hashCoords, hashToUnit, mixUint32 } from "../../gen/hash";
-import { RiverPath, RiverSystem } from "../../gen/rivers";
+import { RiverPath } from "../../gen/rivers";
 import { House, Parcel, Road, SettlementFeatures, SettlementSystem, Village } from "../../gen/settlements";
 import { TerrainSampler } from "../../gen/terrain";
 import { clamp, floorDiv, lerp } from "../../util/math";
 import { LandUseBlender } from "./land-use-blender";
 import { SuperchunkFeatureCache } from "./superchunk-feature-cache";
 
+type DenseTreePoint = {
+  gx: number;
+  gy: number;
+  x: number;
+  y: number;
+  radius: number;
+  alpha: number;
+  shape: number;
+};
+
+type EdgeTreePoint = {
+  x: number;
+  y: number;
+  radius: number;
+  alpha: number;
+  shape: number;
+};
+
+type BridgeSpan = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  width: number;
+};
+
 export class FeatureOverlayRenderer {
   private readonly config: WorldConfig;
   private readonly terrain: TerrainSampler;
-  private readonly rivers: RiverSystem;
   private readonly debug: DebugLayerConfig;
   private readonly treeSeed: number;
   private readonly fieldSeed: number;
@@ -19,7 +44,6 @@ export class FeatureOverlayRenderer {
   constructor(
     config: WorldConfig,
     terrain: TerrainSampler,
-    rivers: RiverSystem,
     settlements: SettlementSystem,
     debug: DebugLayerConfig,
     treeSeed: number,
@@ -27,7 +51,6 @@ export class FeatureOverlayRenderer {
   ) {
     this.config = config;
     this.terrain = terrain;
-    this.rivers = rivers;
     this.debug = debug;
     this.treeSeed = treeSeed;
     this.fieldSeed = fieldSeed;
@@ -40,18 +63,14 @@ export class FeatureOverlayRenderer {
     chunkY: number,
     startX: number,
     startY: number,
-    chunkSize: number
+    chunkSize: number,
+    rivers: RiverPath[]
   ): void {
-    const rivers = this.getRiversForChunk(startX, startY, chunkSize);
     const maskMode = this.debug.showWaterMask || this.debug.showMoisture || this.debug.showForestMask;
     if (maskMode) {
-      if (this.debug.showRivers) {
-        this.drawRivers(ctx, startX, startY, rivers);
-      }
       return;
     }
 
-    this.drawRivers(ctx, startX, startY, rivers);
     const features = this.superchunkCache.getFeaturesForChunk(chunkX, chunkY);
     const landUse = new LandUseBlender(this.config, this.terrain, features);
 
@@ -60,42 +79,6 @@ export class FeatureOverlayRenderer {
     this.drawParcels(ctx, startX, startY, features.parcels);
     this.drawHouses(ctx, startX, startY, features);
     this.drawForest(ctx, startX, startY, chunkSize, landUse);
-  }
-
-  private getRiversForChunk(startX: number, startY: number, chunkSize: number): RiverPath[] {
-    const margin = 28;
-    const minX = startX - margin;
-    const maxX = startX + chunkSize + margin;
-    const minY = startY - margin;
-    const maxY = startY + chunkSize + margin;
-    return this.rivers.getRiversForBounds(minX, maxX, minY, maxY);
-  }
-
-  private drawRivers(ctx: CanvasRenderingContext2D, startX: number, startY: number, rivers: RiverPath[]): void {
-    if (!this.debug.showRivers) {
-      return;
-    }
-
-    for (const river of rivers) {
-      if (river.points.length < 2) {
-        continue;
-      }
-      ctx.beginPath();
-      ctx.moveTo(river.points[0].x - startX, river.points[0].y - startY);
-      for (let i = 1; i < river.points.length; i += 1) {
-        ctx.lineTo(river.points[i].x - startX, river.points[i].y - startY);
-      }
-
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.strokeStyle = "rgba(9, 16, 24, 0.9)";
-      ctx.lineWidth = river.width + 2.8;
-      ctx.stroke();
-
-      ctx.strokeStyle = "rgba(97, 169, 205, 0.9)";
-      ctx.lineWidth = river.width;
-      ctx.stroke();
-    }
   }
 
   private drawForest(
@@ -114,8 +97,8 @@ export class FeatureOverlayRenderer {
     const denseThreshold = this.config.vegetation.forestDenseThreshold;
     const minDensity = this.config.vegetation.forestMinDensity;
 
-    const densePoints: { x: number; y: number; radius: number; alpha: number; shape: number }[] = [];
-    const edgePoints: { x: number; y: number; radius: number; alpha: number; shape: number }[] = [];
+    const densePoints: DenseTreePoint[] = [];
+    const edgePoints: EdgeTreePoint[] = [];
 
     for (let gy = minCellY; gy <= maxCellY; gy += 1) {
       for (let gx = minCellX; gx <= maxCellX; gx += 1) {
@@ -145,6 +128,8 @@ export class FeatureOverlayRenderer {
 
         if (density >= denseThreshold) {
           densePoints.push({
+            gx,
+            gy,
             x: localX,
             y: localY,
             radius,
@@ -163,13 +148,40 @@ export class FeatureOverlayRenderer {
       }
     }
 
-    for (const tree of densePoints) {
-      this.drawTreeSymbol(ctx, tree.x, tree.y, tree.radius, tree.shape, `rgba(83, 122, 103, ${tree.alpha.toFixed(3)})`);
+    const denseComponents = this.groupDenseTrees(densePoints);
+    const borderTrees: EdgeTreePoint[] = [...edgePoints];
+    for (const component of denseComponents) {
+      if (component.length < 5) {
+        for (const tree of component) {
+          borderTrees.push({
+            x: tree.x,
+            y: tree.y,
+            radius: tree.radius * 0.88,
+            alpha: clamp(tree.alpha + 0.08, 0.35, 0.78),
+            shape: tree.shape
+          });
+        }
+        continue;
+      }
+
+      this.drawDenseForestMass(ctx, component);
+      const keySet = new Set(component.map((tree) => `${tree.gx},${tree.gy}`));
+      for (const tree of component) {
+        if (!this.isDenseBoundaryTree(tree.gx, tree.gy, keySet)) {
+          continue;
+        }
+        borderTrees.push({
+          x: tree.x,
+          y: tree.y,
+          radius: tree.radius * 0.82,
+          alpha: clamp(tree.alpha + 0.14, 0.38, 0.84),
+          shape: tree.shape
+        });
+      }
     }
 
-    ctx.lineWidth = 1;
-    for (const tree of edgePoints) {
-      this.drawTreeSymbol(ctx, tree.x, tree.y, tree.radius, tree.shape, `rgba(126, 169, 145, ${tree.alpha.toFixed(3)})`);
+    for (const tree of borderTrees) {
+      this.drawTreeSymbol(ctx, tree.x, tree.y, tree.radius, tree.shape, `rgba(119, 161, 141, ${tree.alpha.toFixed(3)})`);
     }
   }
 
@@ -263,24 +275,15 @@ export class FeatureOverlayRenderer {
     const canopyRadius = Math.max(2.4, radius);
     const lobeCount = 4 + Math.floor(shape * 3);
     const angleOffset = shape * Math.PI * 2;
-    const trunkHeight = Math.max(2, canopyRadius * 0.45);
-    const trunkWidth = Math.max(1.2, canopyRadius * 0.26);
-
-    ctx.fillStyle = "rgba(19, 27, 24, 0.24)";
-    ctx.beginPath();
-    ctx.ellipse(x + canopyRadius * 0.24, y + canopyRadius * 0.54, canopyRadius * 0.72, canopyRadius * 0.42, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(76, 59, 45, 0.9)";
-    ctx.fillRect(x - trunkWidth * 0.5, y + canopyRadius * 0.18, trunkWidth, trunkHeight);
+    const blobRadius = canopyRadius * 0.58;
 
     ctx.fillStyle = fillStyle;
     ctx.beginPath();
     for (let i = 0; i < lobeCount; i += 1) {
       const angle = angleOffset + (i / lobeCount) * Math.PI * 2;
-      const lobeRadius = canopyRadius * (0.8 + ((i + 1) % 2) * 0.2);
-      const px = x + Math.cos(angle) * lobeRadius * 0.42;
-      const py = y - canopyRadius * 0.1 + Math.sin(angle) * lobeRadius * 0.35;
+      const lobeRadius = canopyRadius * (0.84 + ((i + 1) % 2) * 0.18);
+      const px = x + Math.cos(angle) * lobeRadius * 0.5;
+      const py = y + Math.sin(angle) * lobeRadius * 0.42;
       if (i === 0) {
         ctx.moveTo(px, py);
       } else {
@@ -292,6 +295,167 @@ export class FeatureOverlayRenderer {
     ctx.strokeStyle = "rgba(14, 18, 16, 0.9)";
     ctx.lineWidth = 1.4;
     ctx.stroke();
+
+    ctx.fillStyle = "rgba(177, 205, 183, 0.34)";
+    ctx.beginPath();
+    ctx.arc(x - canopyRadius * 0.22, y - canopyRadius * 0.18, blobRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private groupDenseTrees(points: DenseTreePoint[]): DenseTreePoint[][] {
+    const byKey = new Map<string, DenseTreePoint>();
+    for (const point of points) {
+      byKey.set(`${point.gx},${point.gy}`, point);
+    }
+    const visited = new Set<string>();
+    const groups: DenseTreePoint[][] = [];
+    const neighbors = [
+      [-1, -1],
+      [-1, 0],
+      [-1, 1],
+      [0, -1],
+      [0, 1],
+      [1, -1],
+      [1, 0],
+      [1, 1]
+    ];
+
+    for (const point of points) {
+      const startKey = `${point.gx},${point.gy}`;
+      if (visited.has(startKey)) {
+        continue;
+      }
+
+      const queue = [point];
+      visited.add(startKey);
+      const component: DenseTreePoint[] = [];
+      while (queue.length > 0) {
+        const current = queue.pop();
+        if (!current) {
+          break;
+        }
+        component.push(current);
+        for (const neighbor of neighbors) {
+          const nx = current.gx + neighbor[0];
+          const ny = current.gy + neighbor[1];
+          const key = `${nx},${ny}`;
+          if (visited.has(key)) {
+            continue;
+          }
+          const next = byKey.get(key);
+          if (!next) {
+            continue;
+          }
+          visited.add(key);
+          queue.push(next);
+        }
+      }
+      groups.push(component);
+    }
+
+    return groups;
+  }
+
+  private isDenseBoundaryTree(gx: number, gy: number, componentKeys: Set<string>): boolean {
+    for (let oy = -1; oy <= 1; oy += 1) {
+      for (let ox = -1; ox <= 1; ox += 1) {
+        if (ox === 0 && oy === 0) {
+          continue;
+        }
+        if (!componentKeys.has(`${gx + ox},${gy + oy}`)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private drawDenseForestMass(ctx: CanvasRenderingContext2D, component: DenseTreePoint[]): void {
+    const centers = component.map((tree) => ({ x: tree.x, y: tree.y }));
+    const hull = this.convexHull(centers);
+    if (hull.length < 3) {
+      return;
+    }
+
+    let cx = 0;
+    let cy = 0;
+    for (const point of hull) {
+      cx += point.x;
+      cy += point.y;
+    }
+    cx /= hull.length;
+    cy /= hull.length;
+
+    const avgRadius = component.reduce((sum, tree) => sum + tree.radius, 0) / component.length;
+    const expanded = hull.map((point) => {
+      const dx = point.x - cx;
+      const dy = point.y - cy;
+      const distance = Math.hypot(dx, dy);
+      if (distance <= 1e-6) {
+        return point;
+      }
+      const pad = Math.max(6, avgRadius * 0.95);
+      return {
+        x: point.x + (dx / distance) * pad,
+        y: point.y + (dy / distance) * pad
+      };
+    });
+
+    ctx.fillStyle = "rgba(84, 118, 103, 0.88)";
+    ctx.strokeStyle = "rgba(11, 14, 12, 0.84)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < expanded.length; i += 1) {
+      const current = expanded[i];
+      const next = expanded[(i + 1) % expanded.length];
+      const midX = (current.x + next.x) * 0.5;
+      const midY = (current.y + next.y) * 0.5;
+      if (i === 0) {
+        ctx.moveTo(midX, midY);
+      } else {
+        ctx.quadraticCurveTo(current.x, current.y, midX, midY);
+      }
+    }
+    const first = expanded[0];
+    const second = expanded[1 % expanded.length];
+    ctx.quadraticCurveTo(first.x, first.y, (first.x + second.x) * 0.5, (first.y + second.y) * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  private convexHull(points: { x: number; y: number }[]): { x: number; y: number }[] {
+    if (points.length < 4) {
+      return points.slice();
+    }
+
+    const sorted = points
+      .slice()
+      .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+    const lower: { x: number; y: number }[] = [];
+    for (const point of sorted) {
+      while (lower.length >= 2 && this.cross2(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+        lower.pop();
+      }
+      lower.push(point);
+    }
+
+    const upper: { x: number; y: number }[] = [];
+    for (let i = sorted.length - 1; i >= 0; i -= 1) {
+      const point = sorted[i];
+      while (upper.length >= 2 && this.cross2(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+        upper.pop();
+      }
+      upper.push(point);
+    }
+
+    upper.pop();
+    lower.pop();
+    return lower.concat(upper);
+  }
+
+  private cross2(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }): number {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
   }
 
   private pointNearRoad(x: number, y: number, roads: Road[], distance: number): boolean {
@@ -339,11 +503,15 @@ export class FeatureOverlayRenderer {
     }
 
     if (this.debug.showRoads) {
+      const bridges: BridgeSpan[] = [];
       for (const road of features.roads) {
         if (road.points.length < 2) {
           continue;
         }
-        this.drawRoadSegments(ctx, road, startX, startY, rivers);
+        this.drawRoadSegments(ctx, road, startX, startY, rivers, bridges);
+      }
+      if (bridges.length > 0) {
+        this.drawBridges(ctx, startX, startY, bridges);
       }
     }
 
@@ -357,49 +525,54 @@ export class FeatureOverlayRenderer {
     road: Road,
     startX: number,
     startY: number,
-    rivers: RiverPath[]
+    rivers: RiverPath[],
+    bridges: BridgeSpan[]
   ): void {
-    let drawing = false;
-    let drewAny = false;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
     for (let i = 1; i < road.points.length; i += 1) {
       const a = road.points[i - 1];
       const b = road.points[i];
-      if (this.roadSegmentNearRiver(a.x, a.y, b.x, b.y, road.width, rivers)) {
-        if (drawing) {
-          this.strokeRoadPath(ctx, road);
-          drewAny = true;
-        }
-        drawing = false;
+      const cuts = this.collectBridgeCuts(a.x, a.y, b.x, b.y, road.width, rivers, bridges);
+      if (cuts.length === 0) {
+        this.strokeRoadSegment(ctx, road, a.x, a.y, b.x, b.y, startX, startY);
         continue;
       }
 
-      const ax = a.x - startX;
-      const ay = a.y - startY;
-      const bx = b.x - startX;
-      const by = b.y - startY;
-      if (!drawing) {
-        ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        drawing = true;
+      let cursor = 0;
+      for (const cut of cuts) {
+        if (cut.startT > cursor + 0.03) {
+          this.strokeRoadSegment(
+            ctx,
+            road,
+            lerp(a.x, b.x, cursor),
+            lerp(a.y, b.y, cursor),
+            lerp(a.x, b.x, cut.startT),
+            lerp(a.y, b.y, cut.startT),
+            startX,
+            startY
+          );
+        }
+        cursor = Math.max(cursor, cut.endT);
       }
-      ctx.lineTo(bx, by);
-    }
 
-    if (drawing) {
-      this.strokeRoadPath(ctx, road);
-      drewAny = true;
-    }
-
-    if (!drewAny) {
-      return;
+      if (cursor < 0.97) {
+        this.strokeRoadSegment(
+          ctx,
+          road,
+          lerp(a.x, b.x, cursor),
+          lerp(a.y, b.y, cursor),
+          b.x,
+          b.y,
+          startX,
+          startY
+        );
+      }
     }
   }
 
   private strokeRoadPath(ctx: CanvasRenderingContext2D, road: Road): void {
-
     ctx.strokeStyle = "rgba(8, 10, 11, 0.88)";
     ctx.lineWidth = road.width + (road.type === "local" ? 2.2 : 2.9);
     ctx.stroke();
@@ -414,27 +587,227 @@ export class FeatureOverlayRenderer {
     ctx.stroke();
   }
 
-  private roadSegmentNearRiver(
+  private strokeRoadSegment(
+    ctx: CanvasRenderingContext2D,
+    road: Road,
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    startX: number,
+    startY: number
+  ): void {
+    ctx.beginPath();
+    ctx.moveTo(ax - startX, ay - startY);
+    ctx.lineTo(bx - startX, by - startY);
+    this.strokeRoadPath(ctx, road);
+  }
+
+  private collectBridgeCuts(
     ax: number,
     ay: number,
     bx: number,
     by: number,
     roadWidth: number,
-    rivers: RiverPath[]
-  ): boolean {
+    rivers: RiverPath[],
+    bridges: BridgeSpan[]
+  ): { startT: number; endT: number }[] {
+    const segDx = bx - ax;
+    const segDy = by - ay;
+    const segLength = Math.hypot(segDx, segDy);
+    if (segLength <= 1e-6) {
+      return [];
+    }
+
+    const rawCuts: { startT: number; endT: number }[] = [];
     for (const river of rivers) {
       for (let i = 1; i < river.points.length; i += 1) {
         const ra = river.points[i - 1];
         const rb = river.points[i];
-        const d2a = this.distanceSqToSegment(ax, ay, ra.x, ra.y, rb.x, rb.y);
-        const d2b = this.distanceSqToSegment(bx, by, ra.x, ra.y, rb.x, rb.y);
-        const threshold = river.width * 0.46 + roadWidth * 0.78;
-        if (d2a <= threshold * threshold || d2b <= threshold * threshold) {
-          return true;
+        const intersection = this.segmentIntersection(ax, ay, bx, by, ra.x, ra.y, rb.x, rb.y);
+        if (!intersection) {
+          continue;
+        }
+        const halfLength = clamp(river.width * 0.9 + roadWidth * 1.55, 6, 26);
+        const bridgeStartT = clamp(intersection.t - halfLength / segLength, 0, 1);
+        const bridgeEndT = clamp(intersection.t + halfLength / segLength, 0, 1);
+        rawCuts.push({ startT: bridgeStartT, endT: bridgeEndT });
+
+        const bridge = {
+          x1: lerp(ax, bx, bridgeStartT),
+          y1: lerp(ay, by, bridgeStartT),
+          x2: lerp(ax, bx, bridgeEndT),
+          y2: lerp(ay, by, bridgeEndT),
+          width: roadWidth
+        };
+        if (!this.hasNearbyBridge(bridges, bridge)) {
+          bridges.push(bridge);
         }
       }
     }
+
+    const terrainWaterCut = this.sampleTerrainWaterCut(ax, ay, bx, by);
+    if (terrainWaterCut) {
+      rawCuts.push(terrainWaterCut);
+      const bridge = {
+        x1: lerp(ax, bx, terrainWaterCut.startT),
+        y1: lerp(ay, by, terrainWaterCut.startT),
+        x2: lerp(ax, bx, terrainWaterCut.endT),
+        y2: lerp(ay, by, terrainWaterCut.endT),
+        width: roadWidth
+      };
+      if (!this.hasNearbyBridge(bridges, bridge)) {
+        bridges.push(bridge);
+      }
+    }
+
+    if (rawCuts.length === 0) {
+      return [];
+    }
+
+    rawCuts.sort((a, b) => a.startT - b.startT);
+    const merged: { startT: number; endT: number }[] = [rawCuts[0]];
+    for (let i = 1; i < rawCuts.length; i += 1) {
+      const current = rawCuts[i];
+      const tail = merged[merged.length - 1];
+      if (current.startT <= tail.endT + 0.03) {
+        tail.endT = Math.max(tail.endT, current.endT);
+      } else {
+        merged.push(current);
+      }
+    }
+    return merged;
+  }
+
+  private sampleTerrainWaterCut(ax: number, ay: number, bx: number, by: number): { startT: number; endT: number } | null {
+    const samples = 8;
+    const threshold = 0.002;
+    let runStart = -1;
+    let runEnd = -1;
+
+    for (let i = 1; i < samples; i += 1) {
+      const t = i / samples;
+      const x = lerp(ax, bx, t);
+      const y = lerp(ay, by, t);
+      const depth = this.terrain.sample(x, y).waterDepth;
+      if (depth > threshold) {
+        if (runStart < 0) {
+          runStart = t;
+        }
+        runEnd = t;
+      } else if (runStart >= 0) {
+        break;
+      }
+    }
+
+    if (runStart < 0 || runEnd < 0 || runEnd - runStart < 0.06) {
+      return null;
+    }
+    return {
+      startT: clamp(runStart - 0.08, 0, 1),
+      endT: clamp(runEnd + 0.08, 0, 1)
+    };
+  }
+
+  private segmentIntersection(
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    cx: number,
+    cy: number,
+    dx: number,
+    dy: number
+  ): { t: number; x: number; y: number } | null {
+    const rX = bx - ax;
+    const rY = by - ay;
+    const sX = dx - cx;
+    const sY = dy - cy;
+    const denom = rX * sY - rY * sX;
+    if (Math.abs(denom) <= 1e-6) {
+      return null;
+    }
+
+    const qPx = cx - ax;
+    const qPy = cy - ay;
+    const t = (qPx * sY - qPy * sX) / denom;
+    const u = (qPx * rY - qPy * rX) / denom;
+    if (t < 0 || t > 1 || u < 0 || u > 1) {
+      return null;
+    }
+
+    return {
+      t,
+      x: ax + rX * t,
+      y: ay + rY * t
+    };
+  }
+
+  private hasNearbyBridge(existing: BridgeSpan[], candidate: BridgeSpan): boolean {
+    const centerX = (candidate.x1 + candidate.x2) * 0.5;
+    const centerY = (candidate.y1 + candidate.y2) * 0.5;
+    for (const bridge of existing) {
+      const bx = (bridge.x1 + bridge.x2) * 0.5;
+      const by = (bridge.y1 + bridge.y2) * 0.5;
+      if (Math.hypot(centerX - bx, centerY - by) < 5) {
+        return true;
+      }
+    }
     return false;
+  }
+
+  private drawBridges(ctx: CanvasRenderingContext2D, startX: number, startY: number, bridges: BridgeSpan[]): void {
+    for (const bridge of bridges) {
+      const dx = bridge.x2 - bridge.x1;
+      const dy = bridge.y2 - bridge.y1;
+      const length = Math.hypot(dx, dy);
+      if (length <= 1e-4) {
+        continue;
+      }
+
+      const cx = (bridge.x1 + bridge.x2) * 0.5 - startX;
+      const cy = (bridge.y1 + bridge.y2) * 0.5 - startY;
+      const angle = Math.atan2(dy, dx);
+      const deckWidth = bridge.width + 1.4;
+      const railOffset = deckWidth * 0.46;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+
+      ctx.strokeStyle = "rgba(10, 12, 12, 0.9)";
+      ctx.lineWidth = deckWidth + 2.4;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(-length * 0.5, 0);
+      ctx.lineTo(length * 0.5, 0);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(216, 192, 152, 0.98)";
+      ctx.lineWidth = deckWidth;
+      ctx.beginPath();
+      ctx.moveTo(-length * 0.5, 0);
+      ctx.lineTo(length * 0.5, 0);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(13, 14, 13, 0.8)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-length * 0.48, -railOffset);
+      ctx.lineTo(length * 0.48, -railOffset);
+      ctx.moveTo(-length * 0.48, railOffset);
+      ctx.lineTo(length * 0.48, railOffset);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(76, 57, 37, 0.46)";
+      for (let x = -length * 0.5 + 2; x < length * 0.5 - 2; x += 4) {
+        ctx.beginPath();
+        ctx.moveTo(x, -deckWidth * 0.4);
+        ctx.lineTo(x, deckWidth * 0.4);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 
   private drawVillageMarkers(

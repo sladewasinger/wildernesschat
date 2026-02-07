@@ -152,23 +152,25 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] River and road outline pass with stronger line weight hierarchy.
 - [x] Village marker simplification (small cartographic marker instead of large influence circle).
 - [x] Field visibility pass (opacity, linework, and palette improvements).
-- [x] Tree symbol pass (stylized canopies + trunk + shadow; no plain circles).
+- [x] Tree symbol pass (top-down stylized canopies; no trunk rendering).
+- [x] Dense forest mass rendering (merged canopy polygons with boundary trees).
 - [ ] Optional sprite/icon atlas integration for premium tree/building silhouettes.
 
 ### Phase 9: Road/Water Coherence
 
 - [x] Rivers widened relative to roads (target >= 2x major road width).
 - [x] River tracing constraints to reduce self-looping.
-- [x] Road render culling near river channels to avoid obvious overlap artifacts.
-- [ ] Bridge generation for intentional road-water crossings.
-- [ ] Promote rivers and lakes into a unified rendered water polygon layer.
+- [x] Bridge generation for intentional road-water crossings.
+- [x] Road-water crossing rules (bridge spans reserved during routing + rendered bridge decks).
+- [x] River-water mouth blending pass to hide visible disconnected river caps.
+- [x] Promote rivers and lakes into a unified rendered water polygon layer (single raster water pass from terrain + river channels).
 
 ### Phase 10: Runtime Performance Hardening
 
 - [x] Conservative default generation budget and per-frame chunk build limits.
 - [x] Seam validator default-off to avoid chunk-build stalls in normal play.
 - [ ] Profiling pass for chunk build hotspots (terrain sampling vs settlement synthesis vs overlay draw).
-- [ ] Background prefetch for movement direction to hide generation blips while traveling.
+- [x] Directional chunk prefetch based on movement vector.
 
 ## Progress Checklist
 
@@ -185,8 +187,9 @@ All generation modules should accept config and RNG explicitly (no hidden global
 - [x] Visual style pass started (bold outlines, stronger fields, stylized trees).
 - [x] Full chunk streaming for new pipeline implemented.
 - [x] Multiplayer determinism test suite implemented.
-- [ ] Bridge system implemented.
-- [ ] Unified water polygon renderer implemented.
+- [x] Bridge system implemented.
+- [x] Directional chunk prefetch implemented.
+- [x] Unified water polygon renderer implemented.
 - [ ] Runtime hitching eliminated during chunk travel.
 
 ## Open Design Decisions

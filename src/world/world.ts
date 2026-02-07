@@ -4,6 +4,7 @@ import { RiverSystem } from "../gen/rivers";
 import { SettlementSystem } from "../gen/settlements";
 import { TerrainProbe, TerrainSampler, createTerrainSampler } from "../gen/terrain";
 import { buildWorldHandshake, serializeWorldHandshake, WorldHandshake } from "../net/handshake";
+import { floorDiv } from "../util/math";
 import { ChunkRenderer } from "./render/chunk-renderer";
 import { ChunkSeamValidator } from "./render/chunk-seam-validator";
 
@@ -110,12 +111,59 @@ export class World {
   }
 
   getChunkCanvas(chunkX: number, chunkY: number): HTMLCanvasElement {
-    return this.getChunk(chunkX, chunkY).canvas;
+    return this.getChunk(chunkX, chunkY, true).canvas;
   }
 
-  private getChunk(chunkX: number, chunkY: number): Chunk {
+  prefetchChunksNearPlayer(
+    playerX: number,
+    playerY: number,
+    viewportWidth: number,
+    viewportHeight: number,
+    moveDirX: number,
+    moveDirY: number
+  ): void {
+    const chunkSize = this.config.chunk.pixelSize;
+    const basePadding = 1;
+    this.ensureChunkRange(
+      floorDiv(playerX - viewportWidth * 0.5, chunkSize) - basePadding,
+      floorDiv(playerX + viewportWidth * 0.5, chunkSize) + basePadding,
+      floorDiv(playerY - viewportHeight * 0.5, chunkSize) - basePadding,
+      floorDiv(playerY + viewportHeight * 0.5, chunkSize) + basePadding,
+      false
+    );
+
+    const mag = Math.hypot(moveDirX, moveDirY);
+    if (mag < 0.12) {
+      return;
+    }
+
+    const dirX = moveDirX / mag;
+    const dirY = moveDirY / mag;
+    const lookahead = Math.max(0, this.config.chunk.prefetchLookaheadChunks | 0);
+    const lateral = Math.max(0, this.config.chunk.prefetchLateralChunks | 0);
+    if (lookahead === 0 && lateral === 0) {
+      return;
+    }
+
+    const focusX = playerX + dirX * lookahead * chunkSize;
+    const focusY = playerY + dirY * lookahead * chunkSize;
+    const halfW = viewportWidth * 0.5 + lateral * chunkSize;
+    const halfH = viewportHeight * 0.5 + lateral * chunkSize;
+    this.ensureChunkRange(
+      floorDiv(focusX - halfW, chunkSize),
+      floorDiv(focusX + halfW, chunkSize),
+      floorDiv(focusY - halfH, chunkSize),
+      floorDiv(focusY + halfH, chunkSize),
+      false
+    );
+  }
+
+  private getChunk(chunkX: number, chunkY: number, priority: boolean): Chunk {
     const key = chunkKey(chunkX, chunkY);
     const cached = this.chunkCache.get(key);
+    if (cached && priority && cached.status === "pending") {
+      this.enqueueChunkGeneration(key, true);
+    }
     if (cached) {
       return cached;
     }
@@ -127,17 +175,42 @@ export class World {
       status: "pending"
     };
     this.chunkCache.set(key, chunk);
-    this.enqueueChunkGeneration(key);
+    this.enqueueChunkGeneration(key, priority);
     this.pruneCache();
     return chunk;
   }
 
-  private enqueueChunkGeneration(key: string): void {
+  private enqueueChunkGeneration(key: string, priority: boolean): void {
     if (this.pendingSet.has(key)) {
+      if (priority) {
+        const index = this.pendingQueue.indexOf(key);
+        if (index > 0) {
+          this.pendingQueue.splice(index, 1);
+          this.pendingQueue.unshift(key);
+        }
+      }
       return;
     }
     this.pendingSet.add(key);
-    this.pendingQueue.push(key);
+    if (priority) {
+      this.pendingQueue.unshift(key);
+    } else {
+      this.pendingQueue.push(key);
+    }
+  }
+
+  private ensureChunkRange(
+    minChunkX: number,
+    maxChunkX: number,
+    minChunkY: number,
+    maxChunkY: number,
+    priority: boolean
+  ): void {
+    for (let cy = minChunkY; cy <= maxChunkY; cy += 1) {
+      for (let cx = minChunkX; cx <= maxChunkX; cx += 1) {
+        this.getChunk(cx, cy, priority);
+      }
+    }
   }
 
   private pruneCache(): void {

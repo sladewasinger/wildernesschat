@@ -17,6 +17,8 @@ const run = (): void => {
   const superchunkSpan = Number(params.get("superchunkSpan") ?? "NaN");
   const genBudgetMs = Number(params.get("genBudgetMs") ?? "NaN");
   const maxChunkBuilds = Number(params.get("maxChunkBuilds") ?? "NaN");
+  const prefetchLookahead = Number(params.get("prefetchLookahead") ?? "NaN");
+  const prefetchLateral = Number(params.get("prefetchLateral") ?? "NaN");
   const seamValidation = params.get("seamValidation");
   const determinism = params.get("determinism");
   const determinismRuns = Number(params.get("determinismRuns") ?? "3");
@@ -39,6 +41,12 @@ const run = (): void => {
   }
   if (Number.isFinite(maxChunkBuilds) && maxChunkBuilds >= 1 && maxChunkBuilds <= 8) {
     config.chunk.maxChunkBuildsPerFrame = Math.floor(maxChunkBuilds);
+  }
+  if (Number.isFinite(prefetchLookahead) && prefetchLookahead >= 0 && prefetchLookahead <= 8) {
+    config.chunk.prefetchLookaheadChunks = Math.floor(prefetchLookahead);
+  }
+  if (Number.isFinite(prefetchLateral) && prefetchLateral >= 0 && prefetchLateral <= 6) {
+    config.chunk.prefetchLateralChunks = Math.floor(prefetchLateral);
   }
   if (seamValidation === "0" || seamValidation === "false") {
     config.chunk.enableSeamValidation = false;

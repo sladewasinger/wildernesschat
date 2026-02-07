@@ -73,6 +73,8 @@ export type ChunkConfig = {
   maxCachedSuperchunks: number;
   generationBudgetMs: number;
   maxChunkBuildsPerFrame: number;
+  prefetchLookaheadChunks: number;
+  prefetchLateralChunks: number;
   enableSeamValidation: boolean;
   seamColorTolerance: number;
 };
@@ -173,6 +175,8 @@ export const defaultWorldConfig = (seed: string): WorldConfig => {
       maxCachedSuperchunks: 80,
       generationBudgetMs: 2.8,
       maxChunkBuildsPerFrame: 1,
+      prefetchLookaheadChunks: 2,
+      prefetchLateralChunks: 1,
       enableSeamValidation: false,
       seamColorTolerance: 22
     },

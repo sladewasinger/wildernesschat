@@ -11,6 +11,7 @@ This project uses deterministic procedural generation with clear module boundari
 - `src/world/world.ts`
   - Chunk cache + top-level world orchestration.
   - Frame-budgeted chunk generation queue and seam validation hooks.
+  - Movement-direction chunk prefetch and queue prioritization for visible chunks.
   - Wires generation systems and render modules.
 
 ## Rendering Modules
@@ -19,6 +20,7 @@ This project uses deterministic procedural generation with clear module boundari
   - Per-chunk render orchestration and canvas lifecycle.
 - `src/world/render/terrain-surface-renderer.ts`
   - Terrain rasterization (full-res + block sampling with shoreline AA).
+  - Unified water raster composition (terrain water + river channel mask in one pass).
 - `src/world/render/color-sampler.ts`
   - Terrain/water/debug color policy and shoreline edge styling.
 - `src/world/render/land-use-blender.ts`
@@ -26,7 +28,8 @@ This project uses deterministic procedural generation with clear module boundari
   - Coefficient-driven tuning layer for visual readability (field rings, forest pullback near settlements).
 - `src/world/render/feature-overlay-renderer.ts`
   - Rivers, forests, fields, roads, villages, parcels, and houses overlays.
-  - Applies outline-first cartographic styling and road-vs-river overlap culling in render space.
+  - Applies outline-first cartographic styling, bridge rendering at river crossings, and river-mouth blending.
+  - Renders dense canopy masses for forests with individual edge trees.
 - `src/world/render/superchunk-feature-cache.ts`
   - Superchunk-scoped settlement feature cache with eviction.
 - `src/world/render/chunk-seam-validator.ts`
@@ -52,6 +55,7 @@ This project uses deterministic procedural generation with clear module boundari
 - `src/gen/settlement/road-generator.ts`
   - Regional + local roads.
   - Local streets are village-axis-aligned bands with controlled connectors to nearby regional roads.
+  - Regional routing reserves bridgeable water spans for downstream bridge rendering.
 - `src/gen/settlement/parcel-generator.ts`
   - Lot/parcel generation along roads.
 - `src/gen/settlement/house-generator.ts`

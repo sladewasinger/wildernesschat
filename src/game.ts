@@ -86,6 +86,7 @@ export class Game {
     const speed = 210;
     this.playerX += moveX * speed * dt;
     this.playerY += moveY * speed * dt;
+    this.world.prefetchChunksNearPlayer(this.playerX, this.playerY, this.canvas.width, this.canvas.height, moveX, moveY);
     this.world.advanceGenerationBudget();
   }
 

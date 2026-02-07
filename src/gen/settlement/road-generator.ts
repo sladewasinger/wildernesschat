@@ -194,7 +194,8 @@ export class RoadGenerator {
         }
       }
 
-      const laneOffsets = village.radius > 86 ? [-0.85, 0, 0.85] : [-0.55, 0];
+      const laneOffsets =
+        village.radius > 102 ? [-1.15, -0.45, 0.45, 1.15] : village.radius > 78 ? [-0.85, 0, 0.85] : [-0.45, 0.45];
       let laneIndex = 1;
       for (const laneOffset of laneOffsets) {
         const laneRoll = hashToUnit(hashCoords(localSeed, laneOffset + 7, 0, 433));
@@ -225,10 +226,11 @@ export class RoadGenerator {
         laneIndex += 1;
       }
 
-      const crossOffsets = village.radius > 92 ? [-0.45, 0.45] : [0];
+      const crossOffsets =
+        village.radius > 104 ? [-0.85, -0.35, 0.35, 0.85] : village.radius > 80 ? [-0.55, 0, 0.55] : [-0.32, 0.32];
       for (let i = 0; i < crossOffsets.length; i += 1) {
         const crossRoll = hashToUnit(hashCoords(localSeed, i, 0, 541));
-        if (crossOffsets.length > 1 && crossRoll < 0.22) {
+        if (crossOffsets.length > 3 && crossRoll < 0.14) {
           continue;
         }
         const line = this.createStreetLine(
@@ -473,9 +475,13 @@ export class RoadGenerator {
     points[0] = { x: a.x, y: a.y };
     points[points.length - 1] = { x: b.x, y: b.y };
     this.smoothLine(points, 2);
+    const bridgeRun = this.findBridgeableWaterRun(points);
 
     for (let pass = 0; pass < 2; pass += 1) {
       for (let i = 1; i < points.length - 1; i += 1) {
+        if (bridgeRun && i >= bridgeRun.start && i <= bridgeRun.end) {
+          continue;
+        }
         const probe = this.terrain.sample(points[i].x, points[i].y);
         if (probe.waterDepth <= 0.003) {
           continue;
@@ -485,7 +491,7 @@ export class RoadGenerator {
         if (magnitude < 0.0001) {
           continue;
         }
-        const push = 10 + probe.waterDepth * 95;
+        const push = 8 + probe.waterDepth * 85;
         points[i].x += (gradient.x / magnitude) * push;
         points[i].y += (gradient.y / magnitude) * push;
       }
@@ -494,6 +500,54 @@ export class RoadGenerator {
     points[0] = { x: a.x, y: a.y };
     points[points.length - 1] = { x: b.x, y: b.y };
     return points;
+  }
+
+  private findBridgeableWaterRun(points: { x: number; y: number }[]): { start: number; end: number } | null {
+    let runStart = -1;
+    let runEnd = -1;
+    let runCount = 0;
+    let maxDepth = 0;
+
+    for (let i = 1; i < points.length - 1; i += 1) {
+      const depth = this.terrain.sample(points[i].x, points[i].y).waterDepth;
+      if (depth <= 0.004) {
+        continue;
+      }
+      maxDepth = Math.max(maxDepth, depth);
+      if (runStart < 0) {
+        runStart = i;
+        runEnd = i;
+        runCount = 1;
+        continue;
+      }
+      if (i === runEnd + 1) {
+        runEnd = i;
+        continue;
+      }
+      runCount += 1;
+      if (runCount > 1) {
+        return null;
+      }
+      runStart = i;
+      runEnd = i;
+    }
+
+    if (runStart < 0 || runEnd < 0 || runEnd - runStart > 4) {
+      return null;
+    }
+    if (runStart < 2 || runEnd > points.length - 3) {
+      return null;
+    }
+    if (maxDepth > 0.05) {
+      return null;
+    }
+
+    const span = Math.hypot(points[runEnd].x - points[runStart].x, points[runEnd].y - points[runStart].y);
+    if (span > 120) {
+      return null;
+    }
+
+    return { start: runStart, end: runEnd };
   }
 
   private smoothLine(points: { x: number; y: number }[], passes: number): void {
