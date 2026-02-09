@@ -113,8 +113,8 @@ export class V3ChunkManager {
     const geometry = this.mesher.mesh(generatedData);
     const bleed = generatedData.sampleStep * generatedData.paddingCells;
     const display = this.baker.bake(geometry, lod, generatedData.chunkSize, bleed, this.zoomHintForLod(lod));
-    display.sprite.x = chunkX * generatedData.chunkSize - display.bleed;
-    display.sprite.y = chunkY * generatedData.chunkSize - display.bleed;
+    display.sprite.x = Math.round(chunkX * generatedData.chunkSize - display.bleed);
+    display.sprite.y = Math.round(chunkY * generatedData.chunkSize - display.bleed);
 
     const record: ChunkRecord = {
       key,

@@ -21,12 +21,14 @@ export class V3ChunkMesher {
   mesh(generatedData: ChunkGeneratedData): ChunkGeometry {
     const smoothingPasses = this.smoothingPassesForLod(generatedData.lod);
     const bleed = generatedData.paddingCells * generatedData.sampleStep;
+    const seamPad = generatedData.sampleStep * 0.25; // ~ quarter cell
     const overdrawRect: Rect = {
-      minX: -bleed,
-      maxX: generatedData.chunkSize + bleed,
-      minY: -bleed,
-      maxY: generatedData.chunkSize + bleed
+      minX: -bleed - seamPad,
+      maxX: generatedData.chunkSize + bleed + seamPad,
+      minY: -bleed - seamPad,
+      maxY: generatedData.chunkSize + bleed + seamPad
     };
+
 
     const shallowContours = this.extractWaterContours(generatedData, V3_RENDER_CONFIG.waterOutlineThreshold, smoothingPasses);
     // NEW: fill polygons come from per-cell polygons, not closed loops

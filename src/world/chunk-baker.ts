@@ -1,4 +1,4 @@
-import { Container, Graphics, Rectangle, Renderer, Sprite } from "pixi.js";
+import { Container, Graphics, Rectangle, Renderer, SCALE_MODE, Sprite } from "pixi.js";
 import { clamp } from "../lib/math";
 import { V3_LOD_CONFIG, V3_RENDER_CONFIG } from "../config";
 import { V3LodLevel } from "../types";
@@ -41,8 +41,11 @@ export class V3ChunkBaker {
       resolution: textureResolution,
       clearColor: [0, 0, 0, 0]
     });
+    texture.source.scaleMode = <SCALE_MODE>"nearest";   // was LINEAR default
+    texture.source.wrapMode = "clamp-to-edge";
     const sprite = new Sprite(texture);
-
+    sprite.texture.source.scaleMode = <SCALE_MODE>"nearest";   // was LINEAR default
+    
     temp.destroy({ children: true });
     return { sprite, texture, bleed };
   }
