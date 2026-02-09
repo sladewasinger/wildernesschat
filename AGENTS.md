@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - Active app code is in `src/`.
-- Archived code is in `archive/`. Ignore this folder unless user specifically asks you to search for something in here. Do not reference session_resume or any files in this folder.
+- Archived code is in `archive/`. Ignore this folder unless user specifically asks you to search for something in here.
 - Entry point: `src/main.ts`.
 - Runtime/controller: `src/app.ts`.
 - Rendering and sampling: `src/terrain-renderer.ts`, `src/terrain-sampler.ts`, `src/height-field.ts`, `src/river-field.ts`.
@@ -36,3 +36,9 @@
 - Current history uses short, informal summaries; keep commit subjects brief, specific, and action-oriented.
 - Prefer one logical change per commit.
 - PRs should include: what changed and why, manual verification steps/commands used, screenshots or short recordings for visual/rendering changes, and links to related issues/tasks when available.
+
+## Session Handoff Workflow
+- When the user says `goodnight`, update `FEATURE_ROADMAP.md`.
+- Complete the `Session Handoff Checklist` items in that file.
+- Update `Latest Session` with completed work, in-progress work, blockers, files changed, and next first task.
+- Do not create or use a separate session-resume file unless the user explicitly asks for one.

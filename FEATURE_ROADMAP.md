@@ -43,15 +43,15 @@ Ship a deterministic V3 terrain/water baseline with:
 - Acceptance: style matches spec at multiple zoom levels with crisp boundaries.
 
 ## Session Handoff Checklist
-- [ ] Update this file before ending a session.
-- [ ] Record exactly which files changed.
-- [ ] Mark completed checklist items and add next concrete task.
+- [x] Update this file before ending a session.
+- [x] Record exactly which files changed.
+- [x] Mark completed checklist items and add next concrete task.
 
 ## Session Log Template
 Copy this block for each work session:
 
 ```md
-### Session YYYY-MM-DD
+### Session YYYY-MM-DD'T'HH:mm:ss
 - Completed:
 - In progress:
 - Blockers:
@@ -60,12 +60,12 @@ Copy this block for each work session:
 ```
 
 ## Latest Session
-### Session 2026-02-09
-- Completed: migrated rendering to PixiJS; added deterministic large-lake generation; replaced free-form rivers with lake-to-lake deterministic links; kept flat-grass terrain baseline via `heightAtPos()` returning `0`; completed cartographic shoreline style with dark outer stroke + clipped inset light contour.
-- In progress: tuning lake frequency, river density, and stroke thresholds for preferred map look.
-- Blockers: none.
-- Files changed: `package.json`, `package-lock.json`, `src/main.ts`, `src/app.ts`, `src/config.ts`, `src/types.ts`, `src/terrain-sampler.ts`, `src/terrain-renderer.ts`, `src/river-field.ts`, `src/height-field.ts`, `FEATURE_ROADMAP.md`.
-- Next first task: tune hydrology config defaults with visual seed sweeps to match target river/lake prevalence.
+### Session 2026-02-09T00:43:59
+- Completed: added Node ignore rules in `.gitignore`; updated handoff guidance in `AGENTS.md`; removed `node_modules/` and `dist/` from Git tracking via cached index removal.
+- In progress: chunk-border river/water seam issue remains unresolved after attempted mesher changes (reverted).
+- Blockers: seam root cause still needs targeted repro and isolation.
+- Files changed: `.gitignore`, `AGENTS.md`, `FEATURE_ROADMAP.md`.
+- Next first task: reproduce the seam on a fixed seed and inspect chunk overlap ordering and fill coverage at chunk bleed borders.
 
 ## Quick Validation Commands
 - `npm run dev`
