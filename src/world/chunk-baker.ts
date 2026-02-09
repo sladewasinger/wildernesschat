@@ -63,7 +63,7 @@ export class V3ChunkBaker {
 
   private drawFilledContours(
     graphics: Graphics,
-    contours: ChunkGeometry["shallowContours"],
+    contours: ChunkGeometry["shallowFillContours"],
     color: { r: number; g: number; b: number },
     bleed: number
   ): void {
@@ -82,7 +82,7 @@ export class V3ChunkBaker {
     }
   }
 
-  private drawMask(graphics: Graphics, contours: ChunkGeometry["shallowContours"], bleed: number): void {
+  private drawMask(graphics: Graphics, contours: ChunkGeometry["shallowFillContours"], bleed: number): void {
     graphics.clear();
     for (const contour of contours) {
       if (!contour.closed || contour.points.length < 4) {

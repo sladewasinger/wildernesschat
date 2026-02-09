@@ -11,7 +11,7 @@ export const V3_VIEW_CONFIG = {
 
 export const V3_CHUNK_CONFIG = {
   worldSize: 768,
-  samplePaddingCells: 2,
+  samplePaddingCells: 3,
   visiblePaddingChunks: 1
 } as const;
 
