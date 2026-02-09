@@ -29,12 +29,12 @@ export class V3ChunkMesher {
     };
 
     const shallowContours = this.extractWaterContours(generatedData, V3_RENDER_CONFIG.waterOutlineThreshold, smoothingPasses);
+    // NEW: fill polygons come from per-cell polygons, not closed loops
+    const shallowFillContours = this.extractWaterFillPolys(generatedData, V3_RENDER_CONFIG.waterOutlineThreshold, overdrawRect);
     const midLoops = this.extractWaterContours(generatedData, V3_RENDER_CONFIG.waterMidThreshold, smoothingPasses);
     const deepLoops = this.shouldDrawDeepWater(generatedData.lod)
       ? this.extractWaterContours(generatedData, V3_RENDER_CONFIG.waterDeepThreshold, smoothingPasses)
       : [];
-
-    const shallowFillContours = this.clipClosedContoursToRect(shallowContours, overdrawRect);
     const midFillContours = this.clipClosedContoursToRect(midLoops, overdrawRect);
     const deepFillContours = this.clipClosedContoursToRect(deepLoops, overdrawRect);
 
@@ -48,6 +48,122 @@ export class V3ChunkMesher {
     };
   }
 
+  private extractWaterFillPolys(
+    generatedData: ChunkGeneratedData,
+    iso: number,
+    rect: Rect
+  ): ContourPath[] {
+    const cols = generatedData.cols;
+    const rows = generatedData.rows;
+    const out: ContourPath[] = [];
+
+    const valueAt = (gx: number, gy: number): number => generatedData.waterMask[this.index(gx, gy, cols)];
+
+    const inside = (v: number) => v >= iso;
+
+    for (let gy = 1; gy < rows - 2; gy += 1) {
+      for (let gx = 1; gx < cols - 2; gx += 1) {
+        const v00 = valueAt(gx, gy);
+        const v10 = valueAt(gx + 1, gy);
+        const v11 = valueAt(gx + 1, gy + 1);
+        const v01 = valueAt(gx, gy + 1);
+
+        const p00 = { x: generatedData.xCoords[gx], y: generatedData.yCoords[gy] };
+        const p10 = { x: generatedData.xCoords[gx + 1], y: generatedData.yCoords[gy] };
+        const p11 = { x: generatedData.xCoords[gx + 1], y: generatedData.yCoords[gy + 1] };
+        const p01 = { x: generatedData.xCoords[gx], y: generatedData.yCoords[gy + 1] };
+
+        const i00 = inside(v00);
+        const i10 = inside(v10);
+        const i11 = inside(v11);
+        const i01 = inside(v01);
+
+        const mask =
+          (i00 ? 1 : 0) |
+          (i10 ? 2 : 0) |
+          (i11 ? 4 : 0) |
+          (i01 ? 8 : 0);
+
+        if (mask === 0) continue;
+        if (mask === 15) {
+          // full cell inside
+          this.pushClippedPoly(out, [p00, p10, p11, p01], rect);
+          continue;
+        }
+
+        // edge intersection points
+        const top = this.edgeIsoPoint(p00, p10, v00, v10, iso);
+        const right = this.edgeIsoPoint(p10, p11, v10, v11, iso);
+        const bottom = this.edgeIsoPoint(p11, p01, v11, v01, iso);
+        const left = this.edgeIsoPoint(p01, p00, v01, v00, iso);
+
+        // Helper: pick point, fallback to corner if null (rare degeneracy)
+        const T = top ?? p00;
+        const R = right ?? p10;
+        const B = bottom ?? p11;
+        const L = left ?? p01;
+
+        // Emit one polygon per case. (Ambiguous 5/10 handled by same det you already have.)
+        switch (mask) {
+          case 1: this.pushClippedPoly(out, [p00, T, L], rect); break;
+          case 2: this.pushClippedPoly(out, [p10, R, T], rect); break;
+          case 4: this.pushClippedPoly(out, [p11, B, R], rect); break;
+          case 8: this.pushClippedPoly(out, [p01, L, B], rect); break;
+
+          case 3: this.pushClippedPoly(out, [p00, p10, R, L], rect); break;
+          case 6: this.pushClippedPoly(out, [p10, p11, B, T], rect); break;
+          case 12: this.pushClippedPoly(out, [p11, p01, L, R], rect); break;
+          case 9: this.pushClippedPoly(out, [p01, p00, T, B], rect); break;
+
+          case 7: this.pushClippedPoly(out, [p00, p10, p11, B, L], rect); break;
+          case 11: this.pushClippedPoly(out, [p10, p11, p01, L, T], rect); break;
+          case 13: this.pushClippedPoly(out, [p11, p01, p00, T, R], rect); break;
+          case 14: this.pushClippedPoly(out, [p01, p00, p10, R, B], rect); break;
+
+          case 5:
+          case 10: {
+            const det = (v00 - iso) * (v11 - iso) - (v10 - iso) * (v01 - iso);
+            const connectA = det > 0; // same rule as your contour code
+            if (mask === 5) {
+              // corners inside: 00 and 11
+              if (connectA) {
+                this.pushClippedPoly(out, [p00, T, R, p11, B, L], rect);
+              } else {
+                this.pushClippedPoly(out, [p00, T, L], rect);
+                this.pushClippedPoly(out, [p11, B, R], rect);
+              }
+            } else {
+              // corners inside: 10 and 01
+              if (connectA) {
+                this.pushClippedPoly(out, [p10, R, B, p01, L, T], rect);
+              } else {
+                this.pushClippedPoly(out, [p10, R, T], rect);
+                this.pushClippedPoly(out, [p01, L, B], rect);
+              }
+            }
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    }
+
+    return out;
+  }
+
+  private pushClippedPoly(out: ContourPath[], poly: Point[], rect: Rect): void {
+    // close ring for clipper
+    const ring = poly.slice();
+    // clipper expects open ring; we’ll close after
+    const clipped = this.clipPolygonToRect(ring, rect);
+    if (clipped.length >= 3) {
+      const closed = this.ensureClosed(clipped);
+      if (closed.length >= 4) out.push({ closed: true, points: closed });
+    }
+  }
+
+
   private extractWaterContours(
     generatedData: ChunkGeneratedData,
     iso: number,
@@ -57,16 +173,12 @@ export class V3ChunkMesher {
     const rows = generatedData.rows;
 
     const segments: Segment[] = [];
-    const valueAt = (gx: number, gy: number): number => {
-      // Only the outermost padded ring is forced dry. Shared seams remain untouched.
-      if (gx === 0 || gy === 0 || gx === cols - 1 || gy === rows - 1) {
-        return iso - 1;
-      }
-      return generatedData.waterMask[this.index(gx, gy, cols)];
-    };
+    const valueAt = (gx: number, gy: number): number =>
+      generatedData.waterMask[this.index(gx, gy, cols)];
 
-    for (let gy = 0; gy < rows - 1; gy += 1) {
-      for (let gx = 0; gx < cols - 1; gx += 1) {
+    for (let gy = 1; gy < rows - 2; gy += 1) {
+      for (let gx = 1; gx < cols - 2; gx += 1) {
+
         const v00 = valueAt(gx, gy);
         const v10 = valueAt(gx + 1, gy);
         const v11 = valueAt(gx + 1, gy + 1);
@@ -278,7 +390,7 @@ export class V3ChunkMesher {
   }
 
   private stitchSegments(segments: Segment[], sampleStep: number): ContourPath[] {
-    const epsilon = Math.max(sampleStep * 1e-3, 1e-5);
+    const epsilon = Math.max(sampleStep / 64, 1e-4);
     const keyOf = (point: Point): string => `${Math.round(point.x / epsilon)}:${Math.round(point.y / epsilon)}`;
     const pointSums = new Map<string, { x: number; y: number; count: number }>();
     const neighbors = new Map<string, Set<string>>();
@@ -375,18 +487,6 @@ export class V3ChunkMesher {
         keys.map((key) => pointByKey.get(key)).filter((point): point is Point => Boolean(point))
       );
       let closed = points.length >= 4 && keys[keys.length - 1] === keys[0];
-      if (!closed && points.length >= 3) {
-        const firstPoint = points[0];
-        const lastPoint = points[points.length - 1];
-        const closeEps = epsilon * 2;
-        if (this.distanceSq(firstPoint, lastPoint) <= closeEps * closeEps) {
-          points[points.length - 1] = { ...firstPoint };
-          closed = true;
-        }
-      }
-      if (closed && points.length >= 3 && this.distanceSq(points[0], points[points.length - 1]) > 1e-9) {
-        points.push({ ...points[0] });
-      }
       if ((closed && points.length >= 4) || (!closed && points.length >= 2)) {
         out.push({ points, closed });
       }
