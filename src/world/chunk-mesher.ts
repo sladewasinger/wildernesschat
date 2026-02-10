@@ -19,19 +19,21 @@ type Rect = {
 
 export class V3ChunkMesher {
   mesh(generatedData: ChunkGeneratedData): ChunkGeometry {
-    const bleed = generatedData.paddingCells * generatedData.sampleStep;
-    const seamPad = generatedData.sampleStep * 0.25; // ~ quarter cell
+    const smoothingPasses = this.smoothingPassesForLod(generatedData.lod);
     const overdrawRect: Rect = {
-      minX: -bleed - seamPad,
-      maxX: generatedData.chunkSize + bleed + seamPad,
-      minY: -bleed - seamPad,
-      maxY: generatedData.chunkSize + bleed + seamPad
+      minX: 0,
+      maxX: generatedData.chunkSize,
+      minY: 0,
+      maxY: generatedData.chunkSize
     };
 
-
-    // Single-layer water fill pass for seam-debug baseline.
     const shallowFillContours = this.extractWaterFillPolys(generatedData, V3_RENDER_CONFIG.waterOutlineThreshold, overdrawRect);
-    const shallowContours = this.extractOutlineFromFillContours(shallowFillContours, generatedData.sampleStep, overdrawRect);
+    const shallowContours = this.extractOutlineFromFillContours(
+      shallowFillContours,
+      generatedData.sampleStep,
+      overdrawRect,
+      Math.max(1, smoothingPasses)
+    );
 
     return {
       shallowContours,
@@ -158,7 +160,12 @@ export class V3ChunkMesher {
     }
   }
 
-  private extractOutlineFromFillContours(fillContours: ContourPath[], sampleStep: number, clipRect: Rect): ContourPath[] {
+  private extractOutlineFromFillContours(
+    fillContours: ContourPath[],
+    sampleStep: number,
+    clipRect: Rect,
+    smoothingPasses: number
+  ): ContourPath[] {
     const epsilon = Math.max(sampleStep / 64, 1e-4);
     const pointKey = (point: Point): string => `${Math.round(point.x / epsilon)}:${Math.round(point.y / epsilon)}`;
     const edgeKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -213,6 +220,104 @@ export class V3ChunkMesher {
       closed: false,
       points: [segment.a, segment.b]
     }));
+  }
+
+  private stitchBoundarySegments(segments: Segment[], sampleStep: number): ContourPath[] {
+    const epsilon = Math.max(sampleStep / 64, 1e-4);
+    const keyOf = (point: Point): string => `${Math.round(point.x / epsilon)}:${Math.round(point.y / epsilon)}`;
+    const edgeId = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+    const neighbors = new Map<string, Set<string>>();
+    const addNeighbor = (from: string, to: string): void => {
+      const set = neighbors.get(from);
+      if (set) {
+        set.add(to);
+      } else {
+        neighbors.set(from, new Set<string>([to]));
+      }
+    };
+
+    for (const segment of segments) {
+      const aKey = keyOf(segment.a);
+      const bKey = keyOf(segment.b);
+      if (aKey === bKey) {
+        continue;
+      }
+      addNeighbor(aKey, bKey);
+      addNeighbor(bKey, aKey);
+    }
+
+    const pointByKey = new Map<string, Point>();
+    for (const key of neighbors.keys()) {
+      const [qx, qy] = key.split(":");
+      pointByKey.set(key, { x: Number(qx) * epsilon, y: Number(qy) * epsilon });
+    }
+
+    const visited = new Set<string>();
+    const walkPath = (start: string, next: string): ContourPath | null => {
+      const firstEdge = edgeId(start, next);
+      if (visited.has(firstEdge)) {
+        return null;
+      }
+      visited.add(firstEdge);
+      const keys: string[] = [start, next];
+      let prev = start;
+      let current = next;
+      let closed = false;
+
+      while (true) {
+        const candidates = [...(neighbors.get(current) ?? [])]
+          .filter((candidate) => candidate !== prev)
+          .filter((candidate) => !visited.has(edgeId(current, candidate)));
+        if (candidates.length !== 1) {
+          break;
+        }
+        const chosen = candidates[0];
+        visited.add(edgeId(current, chosen));
+        keys.push(chosen);
+        prev = current;
+        current = chosen;
+        if (current === start) {
+          closed = true;
+          break;
+        }
+      }
+
+      const points = this.dedupeSequential(
+        keys.map((key) => pointByKey.get(key)).filter((point): point is Point => Boolean(point))
+      );
+      if (closed && points.length >= 3) {
+        return { closed: true, points: this.ensureClosed(points) };
+      }
+      if (!closed && points.length >= 2) {
+        return { closed: false, points };
+      }
+      return null;
+    };
+
+    const out: ContourPath[] = [];
+    for (const [key, set] of neighbors.entries()) {
+      if (set.size === 2) {
+        continue;
+      }
+      for (const next of set) {
+        const path = walkPath(key, next);
+        if (path) {
+          out.push(path);
+        }
+      }
+    }
+
+    for (const [key, set] of neighbors.entries()) {
+      for (const next of set) {
+        const path = walkPath(key, next);
+        if (path) {
+          out.push(path);
+        }
+      }
+    }
+
+    return out;
   }
 
 
@@ -603,6 +708,20 @@ export class V3ChunkMesher {
     return { points, closed: true };
   }
 
+  private smoothOpenContour(contour: ContourPath, iterations: number): ContourPath {
+    if (contour.closed || contour.points.length < 3) {
+      return contour;
+    }
+    let points = contour.points;
+    for (let i = 0; i < iterations; i += 1) {
+      points = this.chaikinOpen(points);
+      if (points.length < 2) {
+        break;
+      }
+    }
+    return { points, closed: false };
+  }
+
   private simplifyContour(contour: ContourPath, tolerance: number): ContourPath {
     if (!contour.closed || contour.points.length < 4) {
       return contour;
@@ -675,6 +794,23 @@ export class V3ChunkMesher {
     }
     out.push({ ...out[0] });
     return out;
+  }
+
+  private chaikinOpen(points: Point[]): Point[] {
+    if (points.length < 3) {
+      return points.slice();
+    }
+    const out: Point[] = [{ ...points[0] }];
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const a = points[i];
+      const b = points[i + 1];
+      out.push(
+        { x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 },
+        { x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 }
+      );
+    }
+    out.push({ ...points[points.length - 1] });
+    return this.dedupeSequential(out);
   }
 
   private unwrapClosed(points: Point[]): Point[] {

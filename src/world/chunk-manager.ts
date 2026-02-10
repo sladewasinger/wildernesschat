@@ -111,7 +111,7 @@ export class V3ChunkManager {
 
     const generatedData = this.generator.generate(chunkX, chunkY, lod);
     const geometry = this.mesher.mesh(generatedData);
-    const bleed = generatedData.sampleStep * generatedData.paddingCells;
+    const bleed = 0;
     const display = this.baker.bake(geometry, lod, generatedData.chunkSize, bleed, this.zoomHintForLod(lod));
     display.sprite.x = Math.round(chunkX * generatedData.chunkSize - display.bleed);
     display.sprite.y = Math.round(chunkY * generatedData.chunkSize - display.bleed);

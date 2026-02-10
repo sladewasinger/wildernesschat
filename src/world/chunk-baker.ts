@@ -1,4 +1,4 @@
-import { Container, Graphics, Rectangle, Renderer, SCALE_MODE, Sprite } from "pixi.js";
+import { Container, Graphics, Rectangle, Renderer, Sprite } from "pixi.js";
 import { clamp } from "../lib/math";
 import { V3_RENDER_CONFIG } from "../config";
 import { V3LodLevel } from "../types";
@@ -16,14 +16,12 @@ export class V3ChunkBaker {
     const land = new Graphics();
     const shallow = new Graphics();
     const shoreline = new Graphics();
-    const debug = new Graphics();
 
-    temp.addChild(land, shallow, shoreline, debug);
+    temp.addChild(land, shallow, shoreline);
 
     this.drawLandBase(land, chunkSize, bleed);
     this.drawFilledContours(shallow, geometry.shallowFillContours, V3_RENDER_CONFIG.waterShallowColor, bleed);
     this.drawShoreline(shoreline, geometry.shallowContours, bleed, zoomHint);
-    //this.drawChunkDebug(debug, geometry, chunkSize, bleed);
 
     const textureSize = chunkSize + bleed * 2;
     const textureResolution = this.renderer.resolution; // Math.max(1, this.renderer.resolution || 1);
@@ -34,10 +32,8 @@ export class V3ChunkBaker {
       resolution: textureResolution,
       clearColor: [0, 0, 0, 0]
     });
-    texture.source.scaleMode = <SCALE_MODE>"nearest";   // was LINEAR default
     texture.source.wrapMode = "clamp-to-edge";
     const sprite = new Sprite(texture);
-    sprite.texture.source.scaleMode = <SCALE_MODE>"nearest";   // was LINEAR default
     
     temp.destroy({ children: true });
     return { sprite, texture, bleed };
@@ -92,7 +88,7 @@ export class V3ChunkBaker {
       width: outerWidth,
       cap: "round",
       join: "round",
-      alignment: 1
+      alignment: 0.5
     });
 
     for (const contour of contours) {
@@ -112,45 +108,5 @@ export class V3ChunkBaker {
 
   private rgbToHex(r: number, g: number, b: number): number {
     return (r << 16) | (g << 8) | b;
-  }
-
-  private drawChunkDebug(graphics: Graphics, geometry: ChunkGeometry, chunkSize: number, bleed: number): void {
-    const totalSize = chunkSize + bleed * 2;
-    graphics.clear();
-    graphics
-      .rect(bleed, bleed, chunkSize, chunkSize)
-      .stroke({ color: 0xff2d55, width: 1, alignment: 0.5 });
-    graphics
-      .rect(0.5, 0.5, totalSize - 1, totalSize - 1)
-      .stroke({ color: 0xffcc00, width: 1, alignment: 0.5 });
-
-    const bounds = this.contourBounds(geometry.shallowFillContours);
-    if (bounds) {
-      graphics
-        .rect(bounds.minX + bleed, bounds.minY + bleed, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY)
-        .stroke({ color: 0x00d8ff, width: 1, alignment: 0.5 });
-    }
-  }
-
-  private contourBounds(contours: ChunkGeometry["shallowFillContours"]):
-    { minX: number; minY: number; maxX: number; maxY: number } | null {
-    let minX = Number.POSITIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-    let seen = false;
-    for (const contour of contours) {
-      for (const point of contour.points) {
-        seen = true;
-        if (point.x < minX) minX = point.x;
-        if (point.y < minY) minY = point.y;
-        if (point.x > maxX) maxX = point.x;
-        if (point.y > maxY) maxY = point.y;
-      }
-    }
-    if (!seen) {
-      return null;
-    }
-    return { minX, minY, maxX, maxY };
   }
 }
