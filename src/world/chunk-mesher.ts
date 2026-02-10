@@ -19,7 +19,6 @@ type Rect = {
 
 export class V3ChunkMesher {
   mesh(generatedData: ChunkGeneratedData): ChunkGeometry {
-    const smoothingPasses = this.smoothingPassesForLod(generatedData.lod);
     const bleed = generatedData.paddingCells * generatedData.sampleStep;
     const seamPad = generatedData.sampleStep * 0.25; // ~ quarter cell
     const overdrawRect: Rect = {
@@ -30,23 +29,16 @@ export class V3ChunkMesher {
     };
 
 
-    const shallowContours = this.extractWaterContours(generatedData, V3_RENDER_CONFIG.waterOutlineThreshold, smoothingPasses);
-    // NEW: fill polygons come from per-cell polygons, not closed loops
+    // Single-layer water fill pass for seam-debug baseline.
     const shallowFillContours = this.extractWaterFillPolys(generatedData, V3_RENDER_CONFIG.waterOutlineThreshold, overdrawRect);
-    const midLoops = this.extractWaterContours(generatedData, V3_RENDER_CONFIG.waterMidThreshold, smoothingPasses);
-    const deepLoops = this.shouldDrawDeepWater(generatedData.lod)
-      ? this.extractWaterContours(generatedData, V3_RENDER_CONFIG.waterDeepThreshold, smoothingPasses)
-      : [];
-    const midFillContours = this.clipClosedContoursToRect(midLoops, overdrawRect);
-    const deepFillContours = this.clipClosedContoursToRect(deepLoops, overdrawRect);
 
     return {
-      shallowContours,
-      midContours: midFillContours,
-      deepContours: deepFillContours,
+      shallowContours: [],
+      midContours: [],
+      deepContours: [],
       shallowFillContours,
-      midFillContours,
-      deepFillContours
+      midFillContours: [],
+      deepFillContours: []
     };
   }
 
@@ -63,8 +55,8 @@ export class V3ChunkMesher {
 
     const inside = (v: number) => v >= iso;
 
-    for (let gy = 1; gy < rows - 2; gy += 1) {
-      for (let gx = 1; gx < cols - 2; gx += 1) {
+    for (let gy = 0; gy < rows - 1; gy += 1) {
+      for (let gx = 0; gx < cols - 1; gx += 1) {
         const v00 = valueAt(gx, gy);
         const v10 = valueAt(gx + 1, gy);
         const v11 = valueAt(gx + 1, gy + 1);
@@ -178,8 +170,8 @@ export class V3ChunkMesher {
     const valueAt = (gx: number, gy: number): number =>
       generatedData.waterMask[this.index(gx, gy, cols)];
 
-    for (let gy = 1; gy < rows - 2; gy += 1) {
-      for (let gx = 1; gx < cols - 2; gx += 1) {
+    for (let gy = 0; gy < rows - 1; gy += 1) {
+      for (let gx = 0; gx < cols - 1; gx += 1) {
 
         const v00 = valueAt(gx, gy);
         const v10 = valueAt(gx + 1, gy);
