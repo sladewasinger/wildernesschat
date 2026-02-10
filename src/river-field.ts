@@ -18,6 +18,11 @@ type RiverEdge = {
   points: Point[];
 };
 
+export type RiverRenderPath = {
+  width: number;
+  points: Point[];
+};
+
 export class V3RiverField {
   private readonly lakePresenceSeed: number;
   private readonly lakeLayoutSeed: number;
@@ -51,6 +56,40 @@ export class V3RiverField {
       riverMask,
       waterMask
     };
+  }
+
+  riverPathsInBounds(minX: number, minY: number, maxX: number, maxY: number, padding = 0): RiverRenderPath[] {
+    const cellSize = V3_LAKE_CONFIG.cellSize;
+    const minCellX = Math.floor((minX - padding) / cellSize) - V3_RIVER_CONFIG.linkSearchRadiusCells;
+    const maxCellX = Math.floor((maxX + padding) / cellSize) + V3_RIVER_CONFIG.linkSearchRadiusCells;
+    const minCellY = Math.floor((minY - padding) / cellSize) - V3_RIVER_CONFIG.linkSearchRadiusCells;
+    const maxCellY = Math.floor((maxY + padding) / cellSize) + V3_RIVER_CONFIG.linkSearchRadiusCells;
+
+    const uniqueEdges = new Map<string, RiverEdge>();
+    for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+      for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+        const lake = this.resolveLakeCandidate(cellX, cellY);
+        if (!lake) {
+          continue;
+        }
+        for (const edge of this.resolveEdgesForLake(lake)) {
+          uniqueEdges.set(edge.id, edge);
+        }
+      }
+    }
+
+    const pad = padding + V3_RIVER_CONFIG.edgeFeather + V3_RIVER_CONFIG.mandatoryWidth;
+    const out: RiverRenderPath[] = [];
+    for (const edge of uniqueEdges.values()) {
+      if (!this.polylineIntersectsBounds(edge.points, minX - pad, minY - pad, maxX + pad, maxY + pad)) {
+        continue;
+      }
+      out.push({
+        width: edge.width,
+        points: edge.points.map((point) => ({ x: point.x, y: point.y }))
+      });
+    }
+    return out;
   }
 
   private sampleLakeMask(x: number, y: number, lakes: LakeCandidate[]): number {
@@ -305,5 +344,32 @@ export class V3RiverField {
     const sx = ax + dx * t;
     const sy = ay + dy * t;
     return Math.hypot(px - sx, py - sy);
+  }
+
+  private polylineIntersectsBounds(
+    points: Point[],
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number
+  ): boolean {
+    for (const point of points) {
+      if (point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY) {
+        return true;
+      }
+    }
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const a = points[i];
+      const b = points[i + 1];
+      const segMinX = Math.min(a.x, b.x);
+      const segMaxX = Math.max(a.x, b.x);
+      const segMinY = Math.min(a.y, b.y);
+      const segMaxY = Math.max(a.y, b.y);
+      if (segMaxX < minX || segMinX > maxX || segMaxY < minY || segMinY > maxY) {
+        continue;
+      }
+      return true;
+    }
+    return false;
   }
 }

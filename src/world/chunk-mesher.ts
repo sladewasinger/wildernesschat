@@ -19,29 +19,27 @@ type Rect = {
 
 export class V3ChunkMesher {
   mesh(generatedData: ChunkGeneratedData): ChunkGeometry {
-    const smoothingPasses = this.smoothingPassesForLod(generatedData.lod);
-    const overdrawRect: Rect = {
+    const chunkRect: Rect = {
       minX: 0,
       maxX: generatedData.chunkSize,
       minY: 0,
       maxY: generatedData.chunkSize
     };
 
-    const shallowFillContours = this.extractWaterFillPolys(generatedData, V3_RENDER_CONFIG.waterOutlineThreshold, overdrawRect);
-    const shallowContours = this.extractOutlineFromFillContours(
-      shallowFillContours,
-      generatedData.sampleStep,
-      overdrawRect,
-      Math.max(1, smoothingPasses)
+    const shallowFillContours = this.extractWaterFillPolys(
+      generatedData,
+      V3_RENDER_CONFIG.waterOutlineThreshold,
+      chunkRect
     );
 
     return {
-      shallowContours,
+      shallowContours: [],
       midContours: [],
       deepContours: [],
       shallowFillContours,
       midFillContours: [],
-      deepFillContours: []
+      deepFillContours: [],
+      riverStrokePaths: generatedData.riverStrokePaths
     };
   }
 
@@ -163,8 +161,7 @@ export class V3ChunkMesher {
   private extractOutlineFromFillContours(
     fillContours: ContourPath[],
     sampleStep: number,
-    clipRect: Rect,
-    smoothingPasses: number
+    clipRect: Rect
   ): ContourPath[] {
     const epsilon = Math.max(sampleStep / 64, 1e-4);
     const pointKey = (point: Point): string => `${Math.round(point.x / epsilon)}:${Math.round(point.y / epsilon)}`;
@@ -216,10 +213,8 @@ export class V3ChunkMesher {
       boundarySegments.push({ a, b });
     }
 
-    return boundarySegments.map((segment) => ({
-      closed: false,
-      points: [segment.a, segment.b]
-    }));
+    return this.stitchBoundarySegments(boundarySegments, sampleStep)
+      .filter((contour) => (contour.closed ? contour.points.length >= 4 : contour.points.length >= 2));
   }
 
   private stitchBoundarySegments(segments: Segment[], sampleStep: number): ContourPath[] {

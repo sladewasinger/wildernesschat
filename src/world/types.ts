@@ -13,6 +13,11 @@ export type ContourPath = {
   closed: boolean;
 };
 
+export type RiverStrokePath = {
+  width: number;
+  points: { x: number; y: number }[];
+};
+
 export type ChunkGeneratedData = {
   seed: number;
   chunkX: number;
@@ -29,6 +34,7 @@ export type ChunkGeneratedData = {
   cellsDrawn: number;
   lakeCells: number;
   riverCells: number;
+  riverStrokePaths: RiverStrokePath[];
 };
 
 export type ChunkGeometry = {
@@ -38,6 +44,7 @@ export type ChunkGeometry = {
   shallowFillContours: ContourPath[];
   midFillContours: ContourPath[];
   deepFillContours: ContourPath[];
+  riverStrokePaths: RiverStrokePath[];
 };
 
 export type ChunkDisplay = {

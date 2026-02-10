@@ -1,6 +1,6 @@
 import { V3_CACHE_CONFIG } from "./config";
 import { V3HeightField } from "./height-field";
-import { V3RiverField } from "./river-field";
+import { RiverRenderPath, V3RiverField } from "./river-field";
 import { TerrainSample } from "./types";
 
 export class V3TerrainSampler {
@@ -51,5 +51,9 @@ export class V3TerrainSampler {
 
   heightAtPos(x: number, y: number): number {
     return this.heightField.heightAtPos(x, y);
+  }
+
+  riverPathsInBounds(minX: number, minY: number, maxX: number, maxY: number, padding = 0): RiverRenderPath[] {
+    return this.riverField.riverPathsInBounds(minX, minY, maxX, maxY, padding);
   }
 }
