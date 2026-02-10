@@ -19,6 +19,7 @@ type Rect = {
 
 export class V3ChunkMesher {
   mesh(generatedData: ChunkGeneratedData): ChunkGeometry {
+    const smoothingPasses = this.smoothingPassesForLod(generatedData.lod);
     const chunkRect: Rect = {
       minX: 0,
       maxX: generatedData.chunkSize,
@@ -28,12 +29,20 @@ export class V3ChunkMesher {
 
     const shallowFillContours = this.extractWaterFillPolys(
       generatedData,
+      generatedData.lakeMask,
       V3_RENDER_CONFIG.waterOutlineThreshold,
       chunkRect
     );
+    const shallowContours = this.extractWaterContours(
+      generatedData,
+      V3_RENDER_CONFIG.waterOutlineThreshold,
+      Math.max(1, smoothingPasses),
+      chunkRect,
+      0.34
+    );
 
     return {
-      shallowContours: [],
+      shallowContours,
       midContours: [],
       deepContours: [],
       shallowFillContours,
@@ -45,6 +54,7 @@ export class V3ChunkMesher {
 
   private extractWaterFillPolys(
     generatedData: ChunkGeneratedData,
+    mask: Float32Array,
     iso: number,
     rect: Rect
   ): ContourPath[] {
@@ -52,7 +62,7 @@ export class V3ChunkMesher {
     const rows = generatedData.rows;
     const out: ContourPath[] = [];
 
-    const valueAt = (gx: number, gy: number): number => generatedData.waterMask[this.index(gx, gy, cols)];
+    const valueAt = (gx: number, gy: number): number => mask[this.index(gx, gy, cols)];
 
     const inside = (v: number) => v >= iso;
 
@@ -319,7 +329,9 @@ export class V3ChunkMesher {
   private extractWaterContours(
     generatedData: ChunkGeneratedData,
     iso: number,
-    smoothingPasses: number
+    smoothingPasses: number,
+    ownerRect?: Rect,
+    simplifyScale = 0.42
   ): ContourPath[] {
     const cols = generatedData.cols;
     const rows = generatedData.rows;
@@ -432,10 +444,13 @@ export class V3ChunkMesher {
       }
     }
 
-    const simplifyTolerance = generatedData.sampleStep * 0.42;
+    const filteredSegments = ownerRect
+      ? segments.filter((segment) => this.isOwnedSegment(segment, ownerRect, generatedData.sampleStep))
+      : segments;
+    const simplifyTolerance = generatedData.sampleStep * simplifyScale;
     const worldOffsetX = generatedData.chunkX * generatedData.chunkSize;
     const worldOffsetY = generatedData.chunkY * generatedData.chunkSize;
-    return this.stitchSegments(segments, generatedData.sampleStep, worldOffsetX, worldOffsetY)
+    return this.stitchSegments(filteredSegments, generatedData.sampleStep, worldOffsetX, worldOffsetY)
       .filter((contour) => contour.points.length >= 2)
       .map((contour) => {
         if (contour.closed && contour.points.length >= 4) {
@@ -444,7 +459,38 @@ export class V3ChunkMesher {
         }
         return this.simplifyOpenContour(contour, simplifyTolerance);
       })
-      .filter((contour) => (contour.closed ? contour.points.length >= 4 : contour.points.length >= 2));
+      .filter((contour) => {
+        if (contour.closed) {
+          return contour.points.length >= 4;
+        }
+        if (contour.points.length < 2) {
+          return false;
+        }
+        return this.contourLength(contour.points) >= generatedData.sampleStep * 1.35;
+      });
+  }
+
+  private isOwnedSegment(segment: Segment, ownerRect: Rect, sampleStep: number): boolean {
+    const mx = (segment.a.x + segment.b.x) * 0.5;
+    const my = (segment.a.y + segment.b.y) * 0.5;
+    const eps = Math.max(sampleStep * 0.02, 1e-6);
+
+    if (mx < ownerRect.minX - eps || mx > ownerRect.maxX + eps || my < ownerRect.minY - eps || my > ownerRect.maxY + eps) {
+      return false;
+    }
+    if (mx > ownerRect.minX + eps && mx < ownerRect.maxX - eps && my > ownerRect.minY + eps && my < ownerRect.maxY - eps) {
+      return true;
+    }
+
+    // Ownership tie-break: keep top/left edges, drop bottom/right edges.
+    if (Math.abs(mx - ownerRect.maxX) <= eps || Math.abs(my - ownerRect.maxY) <= eps) {
+      return false;
+    }
+    if (Math.abs(mx - ownerRect.minX) <= eps || Math.abs(my - ownerRect.minY) <= eps) {
+      return true;
+    }
+
+    return mx >= ownerRect.minX && mx <= ownerRect.maxX && my >= ownerRect.minY && my <= ownerRect.maxY;
   }
 
   private edgeIsoPoint(a: Point, b: Point, va: number, vb: number, iso: number): Point | null {
@@ -856,6 +902,14 @@ export class V3ChunkMesher {
     const ddx = p.x - sx;
     const ddy = p.y - sy;
     return ddx * ddx + ddy * ddy;
+  }
+
+  private contourLength(points: Point[]): number {
+    let sum = 0;
+    for (let i = 0; i < points.length - 1; i += 1) {
+      sum += Math.hypot(points[i + 1].x - points[i].x, points[i + 1].y - points[i].y);
+    }
+    return sum;
   }
 
   private shouldDrawDeepWater(lod: V3LodLevel): boolean {

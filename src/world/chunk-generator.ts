@@ -25,6 +25,7 @@ export class V3ChunkGenerator {
     const cols = innerCols + paddingCells * 2;
     const rows = innerRows + paddingCells * 2;
     const waterMask = new Float32Array(cols * rows);
+    const lakeMask = new Float32Array(cols * rows);
     const xCoords = new Float32Array(cols);
     const yCoords = new Float32Array(rows);
 
@@ -62,6 +63,7 @@ export class V3ChunkGenerator {
         const localX = xCoords[gx];
         const sample = this.sampler.sampleAt(chunkOriginX + localX, chunkOriginY + localY);
         waterMask[this.index(gx, gy, cols)] = sample.waterMask;
+        lakeMask[this.index(gx, gy, cols)] = sample.lakeMask;
         const isInnerX = gx >= paddingCells && gx < cols - paddingCells;
         const isInnerY = gy >= paddingCells && gy < rows - paddingCells;
         if (!isInnerX || !isInnerY) {
@@ -86,6 +88,7 @@ export class V3ChunkGenerator {
       paddingCells,
       chunkSize,
       waterMask,
+      lakeMask,
       xCoords,
       yCoords,
       cellsDrawn,

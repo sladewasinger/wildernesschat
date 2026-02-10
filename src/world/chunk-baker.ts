@@ -133,12 +133,12 @@ export class V3ChunkBaker {
       if (path.points.length < 2) {
         continue;
       }
-      const coreWidth = Math.max(2, (path.width + V3_RIVER_CONFIG.edgeFeather * 0.8) * 2);
+      const coreWidth = Math.max(2, (path.width + V3_RIVER_CONFIG.edgeFeather) * 2);
       const outlineWidth = coreWidth + outlineBoost * 2;
       outline.setStrokeStyle({
         color: V3_RENDER_CONFIG.shorelineOuterColor,
         width: outlineWidth,
-        cap: "round",
+        cap: "butt",
         join: "round",
         alignment: 0.5
       });
@@ -149,7 +149,7 @@ export class V3ChunkBaker {
           V3_RENDER_CONFIG.waterShallowColor.b
         ),
         width: coreWidth,
-        cap: "round",
+        cap: "butt",
         join: "round",
         alignment: 0.5
       });

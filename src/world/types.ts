@@ -29,6 +29,7 @@ export type ChunkGeneratedData = {
   paddingCells: number;
   chunkSize: number;
   waterMask: Float32Array;
+  lakeMask: Float32Array;
   xCoords: Float32Array;
   yCoords: Float32Array;
   cellsDrawn: number;
