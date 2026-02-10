@@ -31,9 +31,10 @@ export class V3ChunkMesher {
 
     // Single-layer water fill pass for seam-debug baseline.
     const shallowFillContours = this.extractWaterFillPolys(generatedData, V3_RENDER_CONFIG.waterOutlineThreshold, overdrawRect);
+    const shallowContours = this.extractOutlineFromFillContours(shallowFillContours, generatedData.sampleStep, overdrawRect);
 
     return {
-      shallowContours: [],
+      shallowContours,
       midContours: [],
       deepContours: [],
       shallowFillContours,
@@ -157,6 +158,63 @@ export class V3ChunkMesher {
     }
   }
 
+  private extractOutlineFromFillContours(fillContours: ContourPath[], sampleStep: number, clipRect: Rect): ContourPath[] {
+    const epsilon = Math.max(sampleStep / 64, 1e-4);
+    const pointKey = (point: Point): string => `${Math.round(point.x / epsilon)}:${Math.round(point.y / epsilon)}`;
+    const edgeKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
+    const pointFromKey = (key: string): Point => {
+      const [qx, qy] = key.split(":");
+      return { x: Number(qx) * epsilon, y: Number(qy) * epsilon };
+    };
+
+    const edgeCounts = new Map<string, { a: string; b: string; count: number }>();
+    for (const contour of fillContours) {
+      if (!contour.closed || contour.points.length < 4) {
+        continue;
+      }
+      for (let i = 0; i < contour.points.length - 1; i += 1) {
+        const aKey = pointKey(contour.points[i]);
+        const bKey = pointKey(contour.points[i + 1]);
+        if (aKey === bKey) {
+          continue;
+        }
+        const key = edgeKey(aKey, bKey);
+        const existing = edgeCounts.get(key);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          edgeCounts.set(key, { a: aKey, b: bKey, count: 1 });
+        }
+      }
+    }
+
+    const boundarySegments: Segment[] = [];
+    const onBoundary = (value: number, target: number): boolean => Math.abs(value - target) <= epsilon * 2;
+    const isClipBoundaryEdge = (a: Point, b: Point): boolean => {
+      if (onBoundary(a.x, clipRect.minX) && onBoundary(b.x, clipRect.minX)) return true;
+      if (onBoundary(a.x, clipRect.maxX) && onBoundary(b.x, clipRect.maxX)) return true;
+      if (onBoundary(a.y, clipRect.minY) && onBoundary(b.y, clipRect.minY)) return true;
+      if (onBoundary(a.y, clipRect.maxY) && onBoundary(b.y, clipRect.maxY)) return true;
+      return false;
+    };
+    for (const edge of edgeCounts.values()) {
+      if (edge.count !== 1) {
+        continue;
+      }
+      const a = pointFromKey(edge.a);
+      const b = pointFromKey(edge.b);
+      if (isClipBoundaryEdge(a, b)) {
+        continue;
+      }
+      boundarySegments.push({ a, b });
+    }
+
+    return boundarySegments.map((segment) => ({
+      closed: false,
+      points: [segment.a, segment.b]
+    }));
+  }
+
 
   private extractWaterContours(
     generatedData: ChunkGeneratedData,
@@ -275,7 +333,9 @@ export class V3ChunkMesher {
     }
 
     const simplifyTolerance = generatedData.sampleStep * 0.42;
-    return this.stitchSegments(segments, generatedData.sampleStep)
+    const worldOffsetX = generatedData.chunkX * generatedData.chunkSize;
+    const worldOffsetY = generatedData.chunkY * generatedData.chunkSize;
+    return this.stitchSegments(segments, generatedData.sampleStep, worldOffsetX, worldOffsetY)
       .filter((contour) => contour.points.length >= 2)
       .map((contour) => {
         if (contour.closed && contour.points.length >= 4) {
@@ -383,10 +443,18 @@ export class V3ChunkMesher {
     return { x: a.x + (b.x - a.x) * t, y };
   }
 
-  private stitchSegments(segments: Segment[], sampleStep: number): ContourPath[] {
+  private stitchSegments(
+    segments: Segment[],
+    sampleStep: number,
+    worldOffsetX: number,
+    worldOffsetY: number
+  ): ContourPath[] {
     const epsilon = Math.max(sampleStep / 64, 1e-4);
-    const keyOf = (point: Point): string => `${Math.round(point.x / epsilon)}:${Math.round(point.y / epsilon)}`;
-    const pointSums = new Map<string, { x: number; y: number; count: number }>();
+    const keyOf = (point: Point): string => {
+      const wx = point.x + worldOffsetX;
+      const wy = point.y + worldOffsetY;
+      return `${Math.round(wx / epsilon)}:${Math.round(wy / epsilon)}`;
+    };
     const neighbors = new Map<string, Set<string>>();
     const edgeId = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
@@ -398,32 +466,23 @@ export class V3ChunkMesher {
         neighbors.set(from, new Set<string>([to]));
       }
     };
-    const addPoint = (key: string, point: Point): void => {
-      const sum = pointSums.get(key);
-      if (sum) {
-        sum.x += point.x;
-        sum.y += point.y;
-        sum.count += 1;
-      } else {
-        pointSums.set(key, { x: point.x, y: point.y, count: 1 });
-      }
-    };
-
     for (const segment of segments) {
       const aKey = keyOf(segment.a);
       const bKey = keyOf(segment.b);
       if (aKey === bKey) {
         continue;
       }
-      addPoint(aKey, segment.a);
-      addPoint(bKey, segment.b);
       addNeighbor(aKey, bKey);
       addNeighbor(bKey, aKey);
     }
 
     const pointByKey = new Map<string, Point>();
-    for (const [key, sum] of pointSums.entries()) {
-      pointByKey.set(key, { x: sum.x / sum.count, y: sum.y / sum.count });
+    for (const key of neighbors.keys()) {
+      const [qx, qy] = key.split(":");
+      pointByKey.set(key, {
+        x: Number(qx) * epsilon - worldOffsetX,
+        y: Number(qy) * epsilon - worldOffsetY
+      });
     }
 
     const neighborList = new Map<string, string[]>();
