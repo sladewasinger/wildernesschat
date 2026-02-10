@@ -1,51 +1,55 @@
-import { V3_LAKE_CONFIG, V3_RIVER_CONFIG } from "./config";
+import { V3_RIVER_CONFIG } from "./config";
 import { hashCoords, hashString, hashToUnit } from "./lib/hash";
 import { clamp, lerp, smoothstep } from "./lib/math";
-import { Point, TerrainFeatureSample } from "./types";
-
-type LakeCandidate = {
-  id: string;
-  cellX: number;
-  cellY: number;
-  centerX: number;
-  centerY: number;
-  radius: number;
-};
-
-type RiverEdge = {
-  id: string;
-  width: number;
-  points: Point[];
-};
+import { TerrainFeatureSample } from "./types";
 
 export type RiverRenderPath = {
   width: number;
-  points: Point[];
+  points: { x: number; y: number }[];
 };
 
+const TOPO = {
+  baseScale: 3200,
+  detailScale: 1400,
+  warpScale: 2600,
+  warpStrength: 360,
+  derivativeStep: 26,
+  seaLevel: -0.045,
+  lakeFeather: 0.1,
+  contourStep: 0.082,
+  contourWidth: 0.115,
+  riverLowStart: -0.01,
+  riverLowEnd: 0.24,
+  valleyMin: 0.001,
+  valleyMax: 0.016,
+  slopeMin: 0.001,
+  slopeMax: 0.028,
+  islandScale: 1900
+} as const;
+
 export class V3RiverField {
-  private readonly lakePresenceSeed: number;
-  private readonly lakeLayoutSeed: number;
-  private readonly lakeRadiusSeed: number;
-  private readonly edgeStyleSeed: number;
-  private readonly optionalLinkSeed: number;
-  private readonly lakeCellCache = new Map<string, LakeCandidate | null>();
-  private readonly edgeCache = new Map<string, RiverEdge>();
-  private readonly lakeEdgeCache = new Map<string, RiverEdge[]>();
+  private readonly heightSeedA: number;
+  private readonly heightSeedB: number;
+  private readonly warpSeedX: number;
+  private readonly warpSeedY: number;
+  private readonly channelSeed: number;
+  private readonly islandSeed: number;
+  private readonly contourOffset: number;
 
   constructor(seed: string) {
-    this.lakePresenceSeed = hashString(`${seed}:v3:lake:presence`);
-    this.lakeLayoutSeed = hashString(`${seed}:v3:lake:layout`);
-    this.lakeRadiusSeed = hashString(`${seed}:v3:lake:radius`);
-    this.edgeStyleSeed = hashString(`${seed}:v3:river:edge-style`);
-    this.optionalLinkSeed = hashString(`${seed}:v3:river:optional-link`);
+    this.heightSeedA = hashString(`${seed}:topo:height-a`);
+    this.heightSeedB = hashString(`${seed}:topo:height-b`);
+    this.warpSeedX = hashString(`${seed}:topo:warp-x`);
+    this.warpSeedY = hashString(`${seed}:topo:warp-y`);
+    this.channelSeed = hashString(`${seed}:topo:channel`);
+    this.islandSeed = hashString(`${seed}:topo:island`);
+    this.contourOffset = lerp(-0.5, 0.5, hashToUnit(hashString(`${seed}:topo:contour-offset`)));
   }
 
   sampleAt(x: number, y: number): TerrainFeatureSample {
-    const nearbyLakes = this.collectNearbyLakes(x, y, 2);
-    const lakeMask = this.sampleLakeMask(x, y, nearbyLakes);
-    const nearbyEdges = this.collectNearbyEdges(x, y, 2);
-    const riverMask = this.sampleRiverMask(x, y, nearbyEdges);
+    const height = this.heightAt(x, y);
+    const lakeMask = this.lakeMaskAt(x, y, height);
+    const riverMask = this.riverMaskAt(x, y, height, lakeMask);
     const waterMask = Math.max(lakeMask, riverMask);
     if (waterMask < V3_RIVER_CONFIG.kindThreshold) {
       return { kind: "none", lakeMask, riverMask, waterMask };
@@ -58,318 +62,111 @@ export class V3RiverField {
     };
   }
 
-  riverPathsInBounds(minX: number, minY: number, maxX: number, maxY: number, padding = 0): RiverRenderPath[] {
-    const cellSize = V3_LAKE_CONFIG.cellSize;
-    const minCellX = Math.floor((minX - padding) / cellSize) - V3_RIVER_CONFIG.linkSearchRadiusCells;
-    const maxCellX = Math.floor((maxX + padding) / cellSize) + V3_RIVER_CONFIG.linkSearchRadiusCells;
-    const minCellY = Math.floor((minY - padding) / cellSize) - V3_RIVER_CONFIG.linkSearchRadiusCells;
-    const maxCellY = Math.floor((maxY + padding) / cellSize) + V3_RIVER_CONFIG.linkSearchRadiusCells;
-
-    const uniqueEdges = new Map<string, RiverEdge>();
-    for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
-      for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
-        const lake = this.resolveLakeCandidate(cellX, cellY);
-        if (!lake) {
-          continue;
-        }
-        for (const edge of this.resolveEdgesForLake(lake)) {
-          uniqueEdges.set(edge.id, edge);
-        }
-      }
-    }
-
-    const pad = padding + V3_RIVER_CONFIG.edgeFeather + V3_RIVER_CONFIG.mandatoryWidth;
-    const out: RiverRenderPath[] = [];
-    for (const edge of uniqueEdges.values()) {
-      if (!this.polylineIntersectsBounds(edge.points, minX - pad, minY - pad, maxX + pad, maxY + pad)) {
-        continue;
-      }
-      out.push({
-        width: edge.width,
-        points: edge.points.map((point) => ({ x: point.x, y: point.y }))
-      });
-    }
-    return out;
+  riverPathsInBounds(
+    _minX: number,
+    _minY: number,
+    _maxX: number,
+    _maxY: number,
+    _padding = 0
+  ): RiverRenderPath[] {
+    // Rivers are now rendered from the shared water contour field.
+    return [];
   }
 
-  private sampleLakeMask(x: number, y: number, lakes: LakeCandidate[]): number {
-    let mask = 0;
-    for (const lake of lakes) {
-      const distance = Math.hypot(x - lake.centerX, y - lake.centerY);
-      const contribution =
-        1 - smoothstep(lake.radius, lake.radius + V3_LAKE_CONFIG.edgeFeather, distance);
-      if (contribution > mask) {
-        mask = contribution;
-      }
-    }
-    return clamp(mask, 0, 1);
+  private heightAt(x: number, y: number): number {
+    const wx = this.fbm(this.warpSeedX, x, y, TOPO.warpScale, 3) * TOPO.warpStrength;
+    const wy = this.fbm(this.warpSeedY, x, y, TOPO.warpScale, 3) * TOPO.warpStrength;
+
+    const broad = this.fbm(this.heightSeedA, x + wx, y + wy, TOPO.baseScale, 5);
+    const detail = this.fbm(this.heightSeedB, x - wx * 0.45, y + wy * 0.35, TOPO.detailScale, 4);
+    const ridge = 1 - Math.abs(this.fbm(this.channelSeed, x, y, TOPO.detailScale * 0.7, 3));
+
+    return broad * 0.68 + detail * 0.24 + ridge * 0.08;
   }
 
-  private sampleRiverMask(x: number, y: number, edges: RiverEdge[]): number {
-    let mask = 0;
-    for (const edge of edges) {
-      const distance = this.distanceToPolyline(x, y, edge.points);
-      const contribution =
-        1 - smoothstep(edge.width, edge.width + V3_RIVER_CONFIG.edgeFeather, distance);
-      if (contribution > mask) {
-        mask = contribution;
-      }
+  private lakeMaskAt(x: number, y: number, height: number): number {
+    const depth = 1 - smoothstep(TOPO.seaLevel, TOPO.seaLevel + TOPO.lakeFeather, height);
+    if (depth <= 0) {
+      return 0;
     }
-    return clamp(mask, 0, 1);
+
+    const islandBase = this.valueNoise(this.islandSeed, x, y, TOPO.islandScale);
+    const islandCandidate = smoothstep(0.74, 0.9, islandBase * 0.5 + 0.5);
+    const deepLake = smoothstep(0.55, 0.95, depth);
+    const islandMask = islandCandidate * deepLake;
+    return clamp(depth * (1 - islandMask), 0, 1);
   }
 
-  private collectNearbyLakes(x: number, y: number, cellRadius: number): LakeCandidate[] {
-    const cellSize = V3_LAKE_CONFIG.cellSize;
-    const baseCellX = Math.floor(x / cellSize);
-    const baseCellY = Math.floor(y / cellSize);
-    const lakes: LakeCandidate[] = [];
-    for (let oy = -cellRadius; oy <= cellRadius; oy += 1) {
-      for (let ox = -cellRadius; ox <= cellRadius; ox += 1) {
-        const candidate = this.resolveLakeCandidate(baseCellX + ox, baseCellY + oy);
-        if (!candidate) {
-          continue;
-        }
-        lakes.push(candidate);
-      }
-    }
-    return lakes;
+  private riverMaskAt(x: number, y: number, height: number, lakeMask: number): number {
+    const step = TOPO.derivativeStep;
+    const hx1 = this.heightAt(x + step, y);
+    const hx0 = this.heightAt(x - step, y);
+    const hy1 = this.heightAt(x, y + step);
+    const hy0 = this.heightAt(x, y - step);
+
+    const dx = (hx1 - hx0) / (step * 2);
+    const dy = (hy1 - hy0) / (step * 2);
+    const slope = Math.hypot(dx, dy);
+    const laplacian = hx1 + hx0 + hy1 + hy0 - height * 4;
+
+    const valley = smoothstep(TOPO.valleyMin, TOPO.valleyMax, laplacian);
+    const lowland = 1 - smoothstep(TOPO.seaLevel + TOPO.riverLowStart, TOPO.seaLevel + TOPO.riverLowEnd, height);
+    const slopeGate = 1 - smoothstep(TOPO.slopeMin, TOPO.slopeMax, slope);
+    const contour = this.contourBand(height);
+    const channel = smoothstep(0.48, 0.78, this.fbm(this.channelSeed, x, y, TOPO.detailScale * 0.8, 3) * 0.5 + 0.5);
+
+    const raw = (contour * 0.66 + channel * 0.18) * lowland * (valley * 0.5 + slopeGate * 0.18 + 0.06);
+    return clamp(raw * (1 - lakeMask * 0.9), 0, 1);
   }
 
-  private collectNearbyEdges(x: number, y: number, cellRadius: number): RiverEdge[] {
-    const nearbyLakes = this.collectNearbyLakes(x, y, cellRadius + V3_RIVER_CONFIG.linkSearchRadiusCells);
-    const uniqueEdges = new Map<string, RiverEdge>();
-    for (const lake of nearbyLakes) {
-      const edges = this.resolveEdgesForLake(lake);
-      for (const edge of edges) {
-        uniqueEdges.set(edge.id, edge);
-      }
-    }
-    return [...uniqueEdges.values()];
+  private contourBand(height: number): number {
+    const u = (height - this.contourOffset) / TOPO.contourStep;
+    const f = u - Math.floor(u);
+    const d = Math.min(f, 1 - f);
+    return 1 - smoothstep(TOPO.contourWidth * 0.5, TOPO.contourWidth, d);
   }
 
-  private resolveEdgesForLake(lake: LakeCandidate): RiverEdge[] {
-    const cached = this.lakeEdgeCache.get(lake.id);
-    if (cached) {
-      return cached;
+  private fbm(seed: number, x: number, y: number, scale: number, octaves: number): number {
+    let total = 0;
+    let amplitude = 0.5;
+    let frequency = 1;
+    let norm = 0;
+
+    for (let i = 0; i < octaves; i += 1) {
+      total += this.valueNoise(seed + i * 1013904223, x * frequency, y * frequency, scale) * amplitude;
+      norm += amplitude;
+      amplitude *= 0.5;
+      frequency *= 2;
     }
-
-    const neighbors = this.collectNearbyLakesByCell(
-      lake.cellX,
-      lake.cellY,
-      V3_RIVER_CONFIG.linkSearchRadiusCells
-    )
-      .filter((candidate) => candidate.id !== lake.id)
-      .map((candidate) => ({
-        candidate,
-        distance: Math.hypot(candidate.centerX - lake.centerX, candidate.centerY - lake.centerY)
-      }))
-      .filter((entry) => entry.distance <= V3_RIVER_CONFIG.maxLinkDistance)
-      .sort((a, b) => a.distance - b.distance);
-
-    if (neighbors.length === 0) {
-      this.lakeEdgeCache.set(lake.id, []);
-      return [];
+    if (norm <= 1e-9) {
+      return 0;
     }
-
-    const edges: RiverEdge[] = [];
-    edges.push(this.resolveEdge(lake, neighbors[0].candidate));
-    for (let i = 1; i < Math.min(4, neighbors.length); i += 1) {
-      const neighbor = neighbors[i].candidate;
-      const chance = hashToUnit(hashCoords(this.optionalLinkSeed, this.lakeIdToInt(lake.id), this.lakeIdToInt(neighbor.id)));
-      if (chance <= V3_RIVER_CONFIG.optionalLinkChance) {
-        edges.push(this.resolveEdge(lake, neighbor));
-      }
-    }
-
-    this.lakeEdgeCache.set(lake.id, edges);
-    return edges;
+    return total / norm;
   }
 
-  private resolveEdge(a: LakeCandidate, b: LakeCandidate): RiverEdge {
-    const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
-    const cached = this.edgeCache.get(key);
-    if (cached) {
-      return cached;
-    }
+  private valueNoise(seed: number, x: number, y: number, scale: number): number {
+    const fx = x / scale;
+    const fy = y / scale;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const x1 = x0 + 1;
+    const y1 = y0 + 1;
+    const tx = fx - x0;
+    const ty = fy - y0;
+    const sx = tx * tx * (3 - 2 * tx);
+    const sy = ty * ty * (3 - 2 * ty);
 
-    const hashA = this.lakeIdToInt(a.id);
-    const hashB = this.lakeIdToInt(b.id);
-    const widthScale = lerp(
-      1 - V3_RIVER_CONFIG.widthJitter,
-      1 + V3_RIVER_CONFIG.widthJitter,
-      hashToUnit(hashCoords(this.edgeStyleSeed, hashA, hashB, 1))
-    );
-    const amplitude = lerp(
-      V3_RIVER_CONFIG.meanderAmplitudeMin,
-      V3_RIVER_CONFIG.meanderAmplitudeMax,
-      hashToUnit(hashCoords(this.edgeStyleSeed, hashA, hashB, 2))
-    );
-    const waveCount = Math.max(
-      1,
-      Math.round(lerp(1, 3, hashToUnit(hashCoords(this.edgeStyleSeed, hashA, hashB, 3))))
-    );
-    const phase = hashToUnit(hashCoords(this.edgeStyleSeed, hashA, hashB, 4)) * Math.PI * 2;
-    const points = this.buildEdgePolyline(a, b, amplitude, waveCount, phase);
-    const edge: RiverEdge = {
-      id: key,
-      width: V3_RIVER_CONFIG.mandatoryWidth * widthScale,
-      points
-    };
-    this.edgeCache.set(key, edge);
-    return edge;
+    const n00 = this.corner(seed, x0, y0);
+    const n10 = this.corner(seed, x1, y0);
+    const n01 = this.corner(seed, x0, y1);
+    const n11 = this.corner(seed, x1, y1);
+
+    const nx0 = lerp(n00, n10, sx);
+    const nx1 = lerp(n01, n11, sx);
+    return lerp(nx0, nx1, sy);
   }
 
-  private buildEdgePolyline(
-    a: LakeCandidate,
-    b: LakeCandidate,
-    amplitude: number,
-    waveCount: number,
-    phase: number
-  ): Point[] {
-    const dx = b.centerX - a.centerX;
-    const dy = b.centerY - a.centerY;
-    const distance = Math.hypot(dx, dy);
-    if (distance <= 1e-6) {
-      return [
-        { x: a.centerX, y: a.centerY },
-        { x: b.centerX, y: b.centerY }
-      ];
-    }
-
-    const segmentCount = Math.max(4, Math.ceil(distance / V3_RIVER_CONFIG.segmentLength));
-    const nx = -dy / distance;
-    const ny = dx / distance;
-    const points: Point[] = [];
-    for (let i = 0; i <= segmentCount; i += 1) {
-      const t = i / segmentCount;
-      const baseX = lerp(a.centerX, b.centerX, t);
-      const baseY = lerp(a.centerY, b.centerY, t);
-      const envelope = Math.sin(Math.PI * t);
-      const meander = Math.sin(t * waveCount * Math.PI * 2 + phase) * amplitude * envelope;
-      points.push({
-        x: baseX + nx * meander,
-        y: baseY + ny * meander
-      });
-    }
-    return points;
-  }
-
-  private collectNearbyLakesByCell(cellX: number, cellY: number, radius: number): LakeCandidate[] {
-    const lakes: LakeCandidate[] = [];
-    for (let oy = -radius; oy <= radius; oy += 1) {
-      for (let ox = -radius; ox <= radius; ox += 1) {
-        const lake = this.resolveLakeCandidate(cellX + ox, cellY + oy);
-        if (!lake) {
-          continue;
-        }
-        lakes.push(lake);
-      }
-    }
-    return lakes;
-  }
-
-  private resolveLakeCandidate(cellX: number, cellY: number): LakeCandidate | null {
-    const key = `${cellX}:${cellY}`;
-    const cached = this.lakeCellCache.get(key);
-    if (cached !== undefined) {
-      return cached;
-    }
-
-    const presence = hashToUnit(hashCoords(this.lakePresenceSeed, cellX, cellY));
-    if (presence > V3_LAKE_CONFIG.lakeChance) {
-      this.lakeCellCache.set(key, null);
-      return null;
-    }
-
-    const jitterRange = 0.5 * V3_LAKE_CONFIG.jitter;
-    const jx = hashToUnit(hashCoords(this.lakeLayoutSeed, cellX, cellY, 1));
-    const jy = hashToUnit(hashCoords(this.lakeLayoutSeed, cellX, cellY, 2));
-    const fx = 0.5 + (jx * 2 - 1) * jitterRange;
-    const fy = 0.5 + (jy * 2 - 1) * jitterRange;
-    const radius = lerp(
-      V3_LAKE_CONFIG.radiusMin,
-      V3_LAKE_CONFIG.radiusMax,
-      hashToUnit(hashCoords(this.lakeRadiusSeed, cellX, cellY, 3))
-    );
-    if (radius < V3_LAKE_CONFIG.largeLakeMinRadius) {
-      this.lakeCellCache.set(key, null);
-      return null;
-    }
-
-    const candidate: LakeCandidate = {
-      id: key,
-      cellX,
-      cellY,
-      centerX: (cellX + fx) * V3_LAKE_CONFIG.cellSize,
-      centerY: (cellY + fy) * V3_LAKE_CONFIG.cellSize,
-      radius
-    };
-    this.lakeCellCache.set(key, candidate);
-    return candidate;
-  }
-
-  private lakeIdToInt(lakeId: string): number {
-    let hash = 2166136261;
-    for (let i = 0; i < lakeId.length; i += 1) {
-      hash ^= lakeId.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    return hash | 0;
-  }
-
-  private distanceToPolyline(x: number, y: number, points: Point[]): number {
-    if (points.length < 2) {
-      return Number.POSITIVE_INFINITY;
-    }
-    let minDistance = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < points.length - 1; i += 1) {
-      const a = points[i];
-      const b = points[i + 1];
-      const distance = this.distanceToSegment(x, y, a.x, a.y, b.x, b.y);
-      if (distance < minDistance) {
-        minDistance = distance;
-      }
-    }
-    return minDistance;
-  }
-
-  private distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-    const dx = bx - ax;
-    const dy = by - ay;
-    const lengthSq = dx * dx + dy * dy;
-    if (lengthSq <= 1e-6) {
-      return Math.hypot(px - ax, py - ay);
-    }
-    const t = clamp(((px - ax) * dx + (py - ay) * dy) / lengthSq, 0, 1);
-    const sx = ax + dx * t;
-    const sy = ay + dy * t;
-    return Math.hypot(px - sx, py - sy);
-  }
-
-  private polylineIntersectsBounds(
-    points: Point[],
-    minX: number,
-    minY: number,
-    maxX: number,
-    maxY: number
-  ): boolean {
-    for (const point of points) {
-      if (point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY) {
-        return true;
-      }
-    }
-    for (let i = 0; i < points.length - 1; i += 1) {
-      const a = points[i];
-      const b = points[i + 1];
-      const segMinX = Math.min(a.x, b.x);
-      const segMaxX = Math.max(a.x, b.x);
-      const segMinY = Math.min(a.y, b.y);
-      const segMaxY = Math.max(a.y, b.y);
-      if (segMaxX < minX || segMinX > maxX || segMaxY < minY || segMinY > maxY) {
-        continue;
-      }
-      return true;
-    }
-    return false;
+  private corner(seed: number, x: number, y: number): number {
+    return hashToUnit(hashCoords(seed, x, y)) * 2 - 1;
   }
 }

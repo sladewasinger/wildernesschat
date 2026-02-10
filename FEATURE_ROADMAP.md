@@ -1,6 +1,6 @@
 # Feature Roadmap
 
-Last updated: 2026-02-09
+Last updated: 2026-02-10
 
 ## Goal
 Ship a deterministic V3 terrain/water baseline with:
@@ -59,7 +59,14 @@ Copy this block for each work session:
 - Next first task:
 ```
 
-## Latest Session
+## Session History
+### Session 2026-02-10T23:59:00
+- Completed: reworked water rendering pipeline multiple times to isolate seam causes; removed chunk bleed overlap artifacts; reset `src/river-field.ts` to a topo-driven water model (noise-derived height, contour/valley river signal, sea-level lakes); unified water fill+outline in meshing from shared `waterMask` geometry; added deterministic lake island holes; restored successful `npm run build`.
+- In progress: tuning topo water parameters for a balanced amount of lakes/rivers (current result still reads too ocean-heavy for target style).
+- Blockers: no technical blocker; remaining issue is parameter calibration/visual art direction.
+- Files changed: `src/river-field.ts`, `src/world/chunk-baker.ts`, `src/world/chunk-generator.ts`, `src/world/chunk-mesher.ts`.
+- Next first task: tune `TOPO` constants in `src/river-field.ts` (start with `seaLevel`, `riverLowEnd`, `contourWidth`) using a fixed seed to find a stable “happy median” water coverage preset.
+
 ### Session 2026-02-09T00:43:59
 - Completed: added Node ignore rules in `.gitignore`; updated handoff guidance in `AGENTS.md`; removed `node_modules/` and `dist/` from Git tracking via cached index removal.
 - In progress: chunk-border river/water seam issue remains unresolved after attempted mesher changes (reverted).

@@ -1,6 +1,6 @@
 import { Container, Graphics, Rectangle, Renderer, Sprite } from "pixi.js";
 import { clamp } from "../lib/math";
-import { V3_RENDER_CONFIG, V3_RIVER_CONFIG } from "../config";
+import { V3_RENDER_CONFIG } from "../config";
 import { V3LodLevel } from "../types";
 import { ChunkDisplay, ChunkGeometry } from "./types";
 
@@ -15,14 +15,13 @@ export class V3ChunkBaker {
     const temp = new Container();
     const land = new Graphics();
     const shallow = new Graphics();
-    const riverOutline = new Graphics();
-    const riverCore = new Graphics();
+    const shoreline = new Graphics();
 
-    temp.addChild(land, shallow, riverOutline, riverCore);
+    temp.addChild(land, shallow, shoreline);
 
     this.drawLandBase(land, chunkSize, bleed);
     this.drawFilledContours(shallow, geometry.shallowFillContours, V3_RENDER_CONFIG.waterShallowColor, bleed);
-    this.drawRiverStrokePaths(riverOutline, riverCore, geometry, bleed, zoomHint);
+    this.drawShoreline(shoreline, geometry.shallowContours, bleed, zoomHint);
 
     const textureSize = chunkSize + bleed * 2;
     const textureResolution = this.renderer.resolution; // Math.max(1, this.renderer.resolution || 1);
@@ -99,87 +98,6 @@ export class V3ChunkBaker {
       this.drawSmoothPath(graphics, contour, bleed);
     }
     graphics.stroke();
-  }
-
-  private drawRiverStrokePaths(
-    outline: Graphics,
-    core: Graphics,
-    geometry: ChunkGeometry,
-    bleed: number,
-    zoomHint: number
-  ): void {
-    outline.clear();
-    core.clear();
-    const zoomScale = Math.log2(zoomHint + 1);
-    const outlineBoost = clamp(V3_RENDER_CONFIG.shorelineOuterWidthPx + zoomScale * 0.35, 2, 6);
-    outline.setStrokeStyle({
-      color: V3_RENDER_CONFIG.shorelineOuterColor,
-      cap: "round",
-      join: "round",
-      alignment: 0.5
-    });
-    core.setStrokeStyle({
-      color: this.rgbToHex(
-        V3_RENDER_CONFIG.waterShallowColor.r,
-        V3_RENDER_CONFIG.waterShallowColor.g,
-        V3_RENDER_CONFIG.waterShallowColor.b
-      ),
-      cap: "round",
-      join: "round",
-      alignment: 0.5
-    });
-
-    for (const path of geometry.riverStrokePaths) {
-      if (path.points.length < 2) {
-        continue;
-      }
-      const coreWidth = Math.max(2, (path.width + V3_RIVER_CONFIG.edgeFeather) * 2);
-      const outlineWidth = coreWidth + outlineBoost * 2;
-      outline.setStrokeStyle({
-        color: V3_RENDER_CONFIG.shorelineOuterColor,
-        width: outlineWidth,
-        cap: "butt",
-        join: "round",
-        alignment: 0.5
-      });
-      core.setStrokeStyle({
-        color: this.rgbToHex(
-          V3_RENDER_CONFIG.waterShallowColor.r,
-          V3_RENDER_CONFIG.waterShallowColor.g,
-          V3_RENDER_CONFIG.waterShallowColor.b
-        ),
-        width: coreWidth,
-        cap: "butt",
-        join: "round",
-        alignment: 0.5
-      });
-      this.drawPolylineSmooth(outline, path.points, bleed);
-      this.drawPolylineSmooth(core, path.points, bleed);
-    }
-
-    outline.stroke();
-    core.stroke();
-  }
-
-  private drawPolylineSmooth(graphics: Graphics, points: { x: number; y: number }[], bleed: number): void {
-    if (points.length < 2) {
-      return;
-    }
-    graphics.moveTo(points[0].x + bleed, points[0].y + bleed);
-    if (points.length === 2) {
-      graphics.lineTo(points[1].x + bleed, points[1].y + bleed);
-      return;
-    }
-    for (let i = 1; i < points.length - 1; i += 1) {
-      const ctrl = points[i];
-      const next = points[i + 1];
-      const midX = (ctrl.x + next.x) * 0.5;
-      const midY = (ctrl.y + next.y) * 0.5;
-      graphics.quadraticCurveTo(ctrl.x + bleed, ctrl.y + bleed, midX + bleed, midY + bleed);
-    }
-    const penultimate = points[points.length - 2];
-    const last = points[points.length - 1];
-    graphics.quadraticCurveTo(penultimate.x + bleed, penultimate.y + bleed, last.x + bleed, last.y + bleed);
   }
 
   private drawSmoothPath(graphics: Graphics, contour: ChunkGeometry["shallowContours"][number], bleed: number): void {

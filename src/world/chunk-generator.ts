@@ -1,8 +1,8 @@
-import { V3_CHUNK_CONFIG, V3_LOD_CONFIG, V3_RIVER_CONFIG } from "../config";
+import { V3_CHUNK_CONFIG, V3_LOD_CONFIG } from "../config";
 import { hashString } from "../lib/hash";
 import { V3LodLevel } from "../types";
 import { V3TerrainSampler } from "../terrain-sampler";
-import { ChunkGeneratedData } from "./types";
+import { ChunkGeneratedData, RiverStrokePath } from "./types";
 
 export class V3ChunkGenerator {
   private readonly worldSeed: string;
@@ -41,22 +41,7 @@ export class V3ChunkGenerator {
     let riverCells = 0;
     const chunkOriginX = chunkX * chunkSize;
     const chunkOriginY = chunkY * chunkSize;
-    const strokePadding = V3_RIVER_CONFIG.segmentLength + V3_RIVER_CONFIG.mandatoryWidth + V3_RIVER_CONFIG.edgeFeather;
-    const riverStrokePaths = this.sampler
-      .riverPathsInBounds(
-        chunkOriginX,
-        chunkOriginY,
-        chunkOriginX + chunkSize,
-        chunkOriginY + chunkSize,
-        strokePadding
-      )
-      .map((path) => ({
-        width: path.width,
-        points: path.points.map((point) => ({
-          x: point.x - chunkOriginX,
-          y: point.y - chunkOriginY
-        }))
-      }));
+    const riverStrokePaths: RiverStrokePath[] = [];
     for (let gy = 0; gy < rows; gy += 1) {
       const localY = yCoords[gy];
       for (let gx = 0; gx < cols; gx += 1) {

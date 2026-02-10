@@ -27,19 +27,21 @@ export class V3ChunkMesher {
       maxY: generatedData.chunkSize
     };
 
+    const waterContours = this.extractWaterContours(
+      generatedData,
+      generatedData.waterMask,
+      V3_RENDER_CONFIG.waterOutlineThreshold,
+      Math.max(1, smoothingPasses),
+      undefined,
+      0.34
+    );
     const shallowFillContours = this.extractWaterFillPolys(
       generatedData,
-      generatedData.lakeMask,
+      generatedData.waterMask,
       V3_RENDER_CONFIG.waterOutlineThreshold,
       chunkRect
     );
-    const shallowContours = this.extractWaterContours(
-      generatedData,
-      V3_RENDER_CONFIG.waterOutlineThreshold,
-      Math.max(1, smoothingPasses),
-      chunkRect,
-      0.34
-    );
+    const shallowContours = this.extractOutlineFromFillContours(shallowFillContours, generatedData.sampleStep, chunkRect);
 
     return {
       shallowContours,
@@ -328,6 +330,7 @@ export class V3ChunkMesher {
 
   private extractWaterContours(
     generatedData: ChunkGeneratedData,
+    mask: Float32Array,
     iso: number,
     smoothingPasses: number,
     ownerRect?: Rect,
@@ -338,7 +341,7 @@ export class V3ChunkMesher {
 
     const segments: Segment[] = [];
     const valueAt = (gx: number, gy: number): number =>
-      generatedData.waterMask[this.index(gx, gy, cols)];
+      mask[this.index(gx, gy, cols)];
 
     for (let gy = 0; gy < rows - 1; gy += 1) {
       for (let gx = 0; gx < cols - 1; gx += 1) {
